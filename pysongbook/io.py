@@ -1,25 +1,33 @@
 import abc
 from abc import ABC
 import re
-from typing import Generator, Type, Callable
+from typing import Callable, Generator, Type
 
 from pysongbook.model import (
+    AddedNote,
+    Altered,
     Annotation,
     AuthorAnnotation,
+    BassNote,
     Chord,
     ChordedSegment,
+    ChordModifier,
     ChorusMark,
     CodaMark,
+    DominantSeventh,
     EmptyStropheMark,
     GenericChordModifier,
     LetteredStropheMark,
+    MajorSeventh,
+    Minor,
     NumberedStropheMark,
     PlainSegment,
     Song,
     Strophe,
     StropheMark,
     StropheSegment,
-    TitleAnnotation, ChordModifier, MajorSeventh, Minor, Suspended, AddedNote, DominantSeventh, Altered, BassNote,
+    Suspended,
+    TitleAnnotation,
 )
 
 
@@ -41,10 +49,7 @@ class SongFormat(ABC):
 
 def _parse_altered_modifier_match(match: re.Match) -> Altered:
     print(match.group(), match.group(0), match.group(1), match.group(2))
-    return Altered(
-        direction=match.group(1),
-        factor=(5 if not match.group(2) else int(match.group(2)))
-    )
+    return Altered(direction=match.group(1), factor=(5 if not match.group(2) else int(match.group(2))))
 
 
 class ChordParser:
@@ -75,7 +80,7 @@ class ChordParser:
                 match = pattern.match(modif_str)
                 if match is not None:
                     yield converter(match) if pass_match else converter()
-                    modif_str = modif_str[len(match.group()):]
+                    modif_str = modif_str[len(match.group()) :]
                     break
             else:
                 yield GenericChordModifier(modif_str)
@@ -162,7 +167,6 @@ class DefaultFormat(SongFormat):
     def _parse_strophe(self, part: str) -> Strophe:
         mark, body = self._parse_strophe_mark(part)
         pieces = self._normalize_strophe_whitespace(body).split(self.chord_start_mark)
-        # todo non-implicit line chording settings, recognize repetitions
         segments: list[StropheSegment] = [PlainSegment(pieces[0])] if pieces[0] else []
         for piece in pieces[1:]:
             if self.chord_end_mark not in piece:
@@ -221,9 +225,9 @@ class DefaultFormat(SongFormat):
 
     def dump_annotations(self, song: Song, chords: bool = True) -> str:
         rem_annots = [
-            annot for annot in song.annotations
-            if not isinstance(annot, (AuthorAnnotation, TitleAnnotation))
-            and (chords or not annot.is_chord_annotation)
+            annot
+            for annot in song.annotations
+            if not isinstance(annot, (AuthorAnnotation, TitleAnnotation)) and (chords or not annot.is_chord_annotation)
         ]
         if not rem_annots:
             return ""
@@ -273,6 +277,9 @@ class AgamaFormat(DefaultFormat):
     empty_line_pattern = re.compile(r"\n\s*\n")
     empty_startline_pattern = re.compile(r"^\s*\n")
 
+    def loads(self, song_text: str) -> Song:
+        raise NotImplementedError
+
     def dump_strophe(self, strophe: Strophe, indent: int = 0, chords: bool = True) -> str:
         init = self.dump_strophe_mark(strophe.mark, indent=indent)
         indenter = " " * indent
@@ -281,7 +288,8 @@ class AgamaFormat(DefaultFormat):
         if chords:
             indented_body = indenter + raw_body.replace("\n", "\n" + indenter)
             body_with_mark = self.empty_startline_pattern.sub(
-                "", self.empty_line_pattern.sub("\n", indented_body.replace("\n" + indenter, "\n" + init, 1).strip("\n"))
+                "",
+                self.empty_line_pattern.sub("\n", indented_body.replace("\n" + indenter, "\n" + init, 1).strip("\n")),
             )
         else:
             body_with_mark = init + raw_body.replace("\n", "\n" + indenter)
@@ -299,16 +307,16 @@ class AgamaFormat(DefaultFormat):
                 chord_lines.append([])
                 main_lines.append([])
         chord_lines[-1][-1] = chord_lines[-1][-1].rstrip() + "\n"
-        return "".join(
-            "".join(line) for line_pair in zip(chord_lines, main_lines) for line in line_pair
-        )
+        return "".join("".join(line) for line_pair in zip(chord_lines, main_lines) for line in line_pair)
 
     def dump_segment(self, seg: StropheSegment, chords: bool = True) -> str:
         if chords:
             if isinstance(seg, ChordedSegment):
                 chord_str = seg.chord.to_string()
                 length = max(len(chord_str) + 1, len(seg.text))
-                return chord_str.ljust(length) + "\n" + (seg.text if seg.text.endswith("\n") else seg.text.ljust(length))
+                return (
+                    chord_str.ljust(length) + "\n" + (seg.text if seg.text.endswith("\n") else seg.text.ljust(length))
+                )
             else:
                 return " " * len(seg.text) + "\n" + seg.text
         else:
@@ -325,3 +333,10 @@ if __name__ == "__main__":
     pprint.pprint(song)
     print(DefaultFormat().dumps(song))
     print(AgamaFormat().dumps(song))
+
+# TODO songs-latex-modif parsing and output
+# TODO repetitions
+# TODO annotation parsing
+# TODO resolve coda / c-strophe
+# TODO commandline interface
+# TODO agama parsing

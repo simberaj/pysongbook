@@ -1,7 +1,8 @@
 import abc
 from abc import ABC
 import dataclasses
-from typing import Literal, Type, TypeVar, ClassVar
+from typing import ClassVar, Literal, Type, TypeVar
+
 
 # TODO CZ/EN note convention
 Note = Literal["C", "C#", "Db", "D", "D#", "Eb", "E", "F", "F#", "Fb", "G", "G#", "Gb", "A", "A#", "Ab", "B", "H"]
