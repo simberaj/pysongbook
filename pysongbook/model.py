@@ -18,6 +18,10 @@ class StropheSegment(ABC):
     def text(self) -> str:
         raise NotImplementedError
 
+    @abc.abstractmethod
+    def splitlines(self) -> list["StropheSegment"]:
+        raise NotImplementedError
+
 
 @dataclasses.dataclass
 class PlainSegment(StropheSegment):
@@ -28,6 +32,13 @@ class PlainSegment(StropheSegment):
 
     def __sub__(self, other: str) -> "PlainSegment":
         return PlainSegment(text=self.text.removesuffix(other))
+
+    def splitlines(self) -> list["PlainSegment"]:
+        text_chunks = self.text.split("\n")
+        segments = [PlainSegment(chunk + "\n") for chunk in text_chunks[:-1]]
+        if text_chunks[-1]:
+            segments.append(PlainSegment(text_chunks[-1]))
+        return segments
 
 
 class ChordModifier(ABC):
@@ -64,6 +75,12 @@ class ChordedSegment(StropheSegment):
 
     def __sub__(self, other: str) -> "ChordedSegment":
         return ChordedSegment(chord=self.chord, text=self.text.removesuffix(other))
+
+    def splitlines(self) -> list["ChordedSegment"]:
+        plain_split = PlainSegment(self.text).splitlines()
+        if not plain_split:
+            return [self]
+        return [self.__class__(chord=self.chord, text=plseg.text) for plseg in plain_split]
 
 
 class StropheMark(ABC):
@@ -132,6 +149,9 @@ class EmptyStropheMark(InvariantStropheMark):
 class Strophe:
     mark: StropheMark
     segments: list[StropheSegment]
+
+    def single_line_segments(self) -> list[StropheSegment]:
+        return [chunk for seg in self.segments for chunk in seg.splitlines()]
 
 
 class Annotation(ABC):

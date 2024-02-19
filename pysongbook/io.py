@@ -11,7 +11,6 @@ from pysongbook.model import (
     ChorusMark,
     CodaMark,
     EmptyStropheMark,
-    GenericAnnotation,
     GenericChordModifier,
     LetteredStropheMark,
     NumberedStropheMark,
@@ -173,15 +172,15 @@ class DefaultFormat(SongFormat):
         #         if prev_strophe.segments and
         return items
 
-    def dumps(self, song: Song) -> str:
-        header = f"\n{self._dump_heading_line(song)}\n\n"
-        other_annots = self._dump_annotations(song)
+    def dumps(self, song: Song, indent: int | None = None, chords: bool = True) -> str:
+        header = f"\n{self.dump_heading(song)}\n\n"
+        other_annots = self.dump_annotations(song, chords=chords)
         if other_annots:
             header += f"{other_annots}\n\n"
-        body = "\n\n".join(self._dump_song_items(song))
+        body = "\n\n".join(self.dump_song_items(song, indent=indent, chords=chords))
         return header + body
 
-    def _dump_heading_line(self, song: Song) -> str:
+    def dump_heading(self, song: Song) -> str:
         authors = ", ".join(annot.name for annot in song.get_annotations_of_type(AuthorAnnotation))
         try:
             title = next(annot.title for annot in song.get_annotations_of_type(TitleAnnotation))
@@ -192,42 +191,103 @@ class DefaultFormat(SongFormat):
         else:
             return " " * self.heading_indent + title
 
-    def _dump_annotations(self, song: Song) -> str:
-        rem_annots = [annot for annot in song.annotations if not isinstance(annot, (AuthorAnnotation, TitleAnnotation))]
+    def dump_annotations(self, song: Song, chords: bool = True) -> str:
+        rem_annots = [
+            annot for annot in song.annotations
+            if not isinstance(annot, (AuthorAnnotation, TitleAnnotation))
+            # TODO and not is chord annotation if not chords
+        ]
         if not rem_annots:
             return ""
-        return "\n".join(self._dump_annotation(annot) for annot in rem_annots)
+        return "\n".join(self.dump_annotation(annot) for annot in rem_annots)
 
-    def _dump_annotation(self, annot: Annotation) -> str:
+    def dump_annotation(self, annot: Annotation) -> str:
         return " " * self.annotation_indent + annot.to_string(delimiter=self.default_annotation_delimiter)
 
-    def _dump_song_items(self, song: Song) -> Generator[str, None, None]:
-        strophe_indent = self._determine_strophe_indent(song)
+    def dump_song_items(self, song: Song, indent: int | None = None, chords: bool = True) -> Generator[str, None, None]:
+        if indent is None:
+            indent = self._determine_strophe_indent(song)
         for item in song.items:
             if isinstance(item, Strophe):
-                yield self._dump_strophe(item, indent=strophe_indent)
-            else:
-                yield self._dump_annotation(item)
+                yield self.dump_strophe(item, indent=indent, chords=chords)
+            else:  # elif not is chord annotation if not chords
+                yield self.dump_annotation(item)
 
     def _determine_strophe_indent(self, song: Song) -> int:
-        return 4  # TODO, use min
+        mark_strs = [self.dump_strophe_mark(item.mark, indent=0) for item in song.items if isinstance(item, Strophe)]
+        if not mark_strs:
+            return 0
+        mark_length = max(len(mark_str) for mark_str in mark_strs)
+        return mark_length
 
-    def _dump_strophe(self, strophe: Strophe, indent: int = 0) -> str:
-        mark = strophe.mark.to_string(short=True)
-        if mark:
-            mark += self.default_strophe_mark_delimiter
-        init = mark + " " * max(0, indent - len(mark))
+    def dump_strophe(self, strophe: Strophe, indent: int = 0, chords: bool = True) -> str:
+        init = self.dump_strophe_mark(strophe.mark, indent=indent)
         indenter = " " * indent
-        raw_body = "".join(self._dump_segment(seg) for seg in strophe.segments)
+        raw_body = "".join(self.dump_segment(seg, chords=chords) for seg in strophe.single_line_segments())
         indented_body = init + raw_body.replace("\n", "\n" + indenter)
-        print("IB", indented_body)
         return indented_body
 
-    def _dump_segment(self, seg: StropheSegment) -> str:
-        if isinstance(seg, ChordedSegment):
+    def dump_strophe_mark(self, mark: StropheMark, indent: int = 0):
+        mark_str = mark.to_string(short=True)
+        if mark_str:
+            mark_str += self.default_strophe_mark_delimiter
+        init = mark_str + " " * max(1, indent - len(mark_str))
+        return init
+
+    def dump_segment(self, seg: StropheSegment, chords: bool = True) -> str:
+        if isinstance(seg, ChordedSegment) and chords:
             return self.chord_start_mark + seg.chord.to_string() + self.chord_end_mark + seg.text
         else:
             return seg.text
+
+
+class AgamaFormat(DefaultFormat):
+    empty_line_pattern = re.compile(r"\n\s*\n")
+    empty_startline_pattern = re.compile(r"^\s*\n")
+
+    def dump_strophe(self, strophe: Strophe, indent: int = 0, chords: bool = True) -> str:
+        init = self.dump_strophe_mark(strophe.mark, indent=indent)
+        indenter = " " * indent
+        dumped_segments = [self.dump_segment(seg, chords=chords) for seg in strophe.single_line_segments()]
+        raw_body = self._merge_lines(dumped_segments) if chords else "".join(dumped_segments)
+        if chords:
+            indented_body = indenter + raw_body.replace("\n", "\n" + indenter)
+            body_with_mark = self.empty_startline_pattern.sub(
+                "", self.empty_line_pattern.sub("\n", indented_body.replace("\n" + indenter, "\n" + init, 1).strip("\n"))
+            )
+            print(repr(body_with_mark))
+        else:
+            body_with_mark = init + raw_body.replace("\n", "\n" + indenter)
+        return body_with_mark
+
+    def _merge_lines(self, dumped_segments: list[str]) -> str:
+        chord_lines = [[]]
+        main_lines = [[]]
+        for dseg in dumped_segments:
+            chord_line, main_line = dseg.split("\n", maxsplit=1)
+            chord_lines[-1].append(chord_line)
+            main_lines[-1].append(main_line)
+            if main_line.endswith("\n"):
+                chord_lines[-1][-1] = chord_lines[-1][-1].rstrip() + "\n"
+                chord_lines.append([])
+                main_lines.append([])
+        chord_lines[-1][-1] = chord_lines[-1][-1].rstrip() + "\n"
+        print([line for line_pair in zip(chord_lines, main_lines) for line in line_pair])
+        return "".join(
+            "".join(line) for line_pair in zip(chord_lines, main_lines) for line in line_pair
+        )
+
+    def dump_segment(self, seg: StropheSegment, chords: bool = True) -> str:
+        if chords:
+            if isinstance(seg, ChordedSegment):
+                chord_str = seg.chord.to_string()
+                length = max(len(chord_str) + 1, len(seg.text))
+                return chord_str.ljust(length) + "\n" + (seg.text if seg.text.endswith("\n") else seg.text.ljust(length))
+            else:
+                return " " * len(seg.text) + "\n" + seg.text
+        else:
+            return seg.text
+
 
 
 if __name__ == "__main__":
@@ -239,3 +299,4 @@ if __name__ == "__main__":
         song = DefaultFormat().loads(f.read())
     pprint.pprint(song)
     print(DefaultFormat().dumps(song))
+    print(AgamaFormat().dumps(song))
