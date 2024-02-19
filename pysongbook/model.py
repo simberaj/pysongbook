@@ -1,7 +1,10 @@
 import abc
 from abc import ABC
 import dataclasses
-from typing import Literal, Type, TypeVar
+from typing import Literal, Type, TypeVar, ClassVar
+
+# TODO CZ/EN note convention
+Note = Literal["C", "C#", "Db", "D", "D#", "Eb", "E", "F", "F#", "Fb", "G", "G#", "Gb", "A", "A#", "Ab", "B", "H"]
 
 
 class StropheSegment(ABC):
@@ -42,9 +45,75 @@ class PlainSegment(StropheSegment):
 
 
 class ChordModifier(ABC):
+    @property
+    @abc.abstractmethod
+    def level(self) -> str:
+        raise NotImplementedError
+
     @abc.abstractmethod
     def to_string(self) -> str:
         raise NotImplementedError
+
+
+@dataclasses.dataclass
+class Minor(ChordModifier):
+    level: ClassVar[int] = 0
+
+    def to_string(self) -> str:
+        return "m"
+
+
+@dataclasses.dataclass
+class DominantSeventh(ChordModifier):
+    level: ClassVar[int] = 1
+
+    def to_string(self) -> str:
+        return "7"
+
+
+@dataclasses.dataclass
+class MajorSeventh(ChordModifier):
+    level: ClassVar[int] = 1
+
+    def to_string(self) -> str:
+        return "maj7"
+
+
+@dataclasses.dataclass
+class AddedNote(ChordModifier):
+    factor: int
+    level: ClassVar[int] = 1
+
+    def to_string(self) -> str:
+        return str(self.factor)
+
+
+@dataclasses.dataclass
+class Suspended(ChordModifier):
+    factor: int
+    level: ClassVar[int] = 1
+
+    def to_string(self) -> str:
+        return f"sus{self.factor}"
+
+
+@dataclasses.dataclass
+class Altered(ChordModifier):
+    direction: Literal["+", "dim"]
+    factor: int = 5
+    level: ClassVar[int] = 1
+
+    def to_string(self) -> str:
+        return self.direction if self.factor == 5 else f"{self.direction}{self.factor}"
+
+
+@dataclasses.dataclass
+class BassNote(ChordModifier):
+    note: Note
+    level: ClassVar[int] = 0
+
+    def to_string(self) -> str:
+        return "/" + self.note
 
 
 @dataclasses.dataclass
@@ -57,8 +126,7 @@ class GenericChordModifier(ChordModifier):  # todo replace with meaningful Chord
 
 @dataclasses.dataclass
 class Chord:
-    # major: Literal["A", "B", "C", "D", "E", "F", "G"]  # TODO also halftones!
-    root: str
+    root: Note
     modifiers: list[ChordModifier]
 
     def to_string(self) -> str:
@@ -155,6 +223,11 @@ class Strophe:
 
 
 class Annotation(ABC):
+    @property
+    @abc.abstractmethod
+    def is_chord_annotation(self) -> bool:
+        raise NotImplementedError
+
     @abc.abstractmethod
     def to_string(self, delimiter: str) -> str:
         raise NotImplementedError
@@ -163,6 +236,7 @@ class Annotation(ABC):
 @dataclasses.dataclass
 class AuthorAnnotation(Annotation):
     name: str
+    is_chord_annotation: bool = False
 
     def to_string(self, delimiter: str) -> str:
         return "Author" + delimiter + self.name
@@ -171,15 +245,17 @@ class AuthorAnnotation(Annotation):
 @dataclasses.dataclass
 class TitleAnnotation(Annotation):
     title: str
+    is_chord_annotation: bool = False
 
     def to_string(self, delimiter: str) -> str:
         return "Title" + delimiter + self.title
 
 
 @dataclasses.dataclass
-class GenericAnnotation(Annotation):  # TODO this should be replaced by more specialized subclasses (left as fallback)
+class GenericAnnotation(Annotation):  # TODO this should be replaced by more specialized subclasses & left as fallback
     key: str
     value: str
+    is_chord_annotation: bool = False
 
     def to_string(self, delimiter: str) -> str:
         return self.key + delimiter + self.value

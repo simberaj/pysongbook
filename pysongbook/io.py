@@ -1,7 +1,7 @@
 import abc
 from abc import ABC
 import re
-from typing import Generator, Type
+from typing import Generator, Type, Callable
 
 from pysongbook.model import (
     Annotation,
@@ -19,7 +19,7 @@ from pysongbook.model import (
     Strophe,
     StropheMark,
     StropheSegment,
-    TitleAnnotation,
+    TitleAnnotation, ChordModifier, MajorSeventh, Minor, Suspended, AddedNote, DominantSeventh, Altered, BassNote,
 )
 
 
@@ -39,8 +39,26 @@ class SongFormat(ABC):
         ...
 
 
+def _parse_altered_modifier_match(match: re.Match) -> Altered:
+    print(match.group(), match.group(0), match.group(1), match.group(2))
+    return Altered(
+        direction=match.group(1),
+        factor=(5 if not match.group(2) else int(match.group(2)))
+    )
+
+
 class ChordParser:
-    tone_pattern = re.compile(r"[A-H](?:#|b)?")
+    tone_pattern_str = r"[A-H](?:#|b)?"
+    tone_pattern = re.compile(tone_pattern_str)
+    modifier_patterns: tuple[re.Pattern, Callable[..., ChordModifier], bool] = [
+        (re.compile(r"maj7?"), MajorSeventh, False),
+        (re.compile(r"m"), Minor, False),
+        (re.compile(r"7"), DominantSeventh, False),
+        (re.compile(r"\d+"), (lambda match: AddedNote(int(match.group()))), True),
+        (re.compile(r"sus(\d)"), (lambda match: Suspended(int(match.group(0)))), True),
+        (re.compile(r"(\+|dim)(\d)?"), _parse_altered_modifier_match, True),
+        (re.compile(r"/" + tone_pattern_str), (lambda match: BassNote(match.group()[1:])), True),
+    ]
 
     def parse(self, chord_str: str) -> Chord:
         if not chord_str:
@@ -48,10 +66,20 @@ class ChordParser:
         root = self.tone_pattern.match(chord_str)
         if root is None:
             raise SongParseError(f"invalid chord major: {chord_str}")
-        modifiers = []
-        if chord_str[root.end() :]:
-            modifiers.append(GenericChordModifier(chord_str[root.end() :]))
+        modifiers = list(self.parse_modifiers(chord_str[root.end() :]))
         return Chord(root.group(), modifiers=modifiers)
+
+    def parse_modifiers(self, modif_str: str) -> Generator[ChordModifier, None, None]:
+        while modif_str:
+            for pattern, converter, pass_match in self.modifier_patterns:
+                match = pattern.match(modif_str)
+                if match is not None:
+                    yield converter(match) if pass_match else converter()
+                    modif_str = modif_str[len(match.group()):]
+                    break
+            else:
+                yield GenericChordModifier(modif_str)
+                return
 
 
 class DefaultFormat(SongFormat):
@@ -195,7 +223,7 @@ class DefaultFormat(SongFormat):
         rem_annots = [
             annot for annot in song.annotations
             if not isinstance(annot, (AuthorAnnotation, TitleAnnotation))
-            # TODO and not is chord annotation if not chords
+            and (chords or not annot.is_chord_annotation)
         ]
         if not rem_annots:
             return ""
@@ -255,7 +283,6 @@ class AgamaFormat(DefaultFormat):
             body_with_mark = self.empty_startline_pattern.sub(
                 "", self.empty_line_pattern.sub("\n", indented_body.replace("\n" + indenter, "\n" + init, 1).strip("\n"))
             )
-            print(repr(body_with_mark))
         else:
             body_with_mark = init + raw_body.replace("\n", "\n" + indenter)
         return body_with_mark
@@ -272,7 +299,6 @@ class AgamaFormat(DefaultFormat):
                 chord_lines.append([])
                 main_lines.append([])
         chord_lines[-1][-1] = chord_lines[-1][-1].rstrip() + "\n"
-        print([line for line_pair in zip(chord_lines, main_lines) for line in line_pair])
         return "".join(
             "".join(line) for line_pair in zip(chord_lines, main_lines) for line in line_pair
         )
@@ -287,7 +313,6 @@ class AgamaFormat(DefaultFormat):
                 return " " * len(seg.text) + "\n" + seg.text
         else:
             return seg.text
-
 
 
 if __name__ == "__main__":
