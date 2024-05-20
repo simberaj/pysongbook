@@ -1,4 +1,5 @@
 import abc
+import copy
 from abc import ABC
 import dataclasses
 from typing import ClassVar, Literal, Type, TypeVar
@@ -6,6 +7,10 @@ from typing import ClassVar, Literal, Type, TypeVar
 
 # TODO CZ/EN note convention
 Note = Literal["C", "C#", "Db", "D", "D#", "Eb", "E", "F", "F#", "Fb", "G", "G#", "Gb", "A", "A#", "Ab", "B", "H"]
+
+
+class MalformedSongError(ValueError):
+    pass
 
 
 class StropheSegment(ABC):
@@ -120,6 +125,7 @@ class BassNote(ChordModifier):
 @dataclasses.dataclass
 class GenericChordModifier(ChordModifier):  # todo replace with meaningful ChordModifiers
     string: str
+    level: ClassVar[int] = 1
 
     def to_string(self) -> str:
         return self.string
@@ -162,10 +168,16 @@ class StropheMark(ABC):
     def to_string(self, short: bool) -> str:
         raise NotImplementedError
 
+    @property
+    @abc.abstractmethod
+    def is_chorus(self) -> bool:
+        raise NotImplementedError
 
-@dataclasses.dataclass
+
+@dataclasses.dataclass(eq=True, frozen=True)
 class NumberedStropheMark(StropheMark):
     number: int
+    is_chorus: ClassVar[bool] = False
 
     @classmethod
     def from_string(cls, mark: str) -> "NumberedStropheMark":
@@ -175,9 +187,10 @@ class NumberedStropheMark(StropheMark):
         return str(self.number)
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(eq=True, frozen=True)
 class LetteredStropheMark(StropheMark):
     letter: Literal["A", "B", "C", "D", "E"]
+    is_chorus: ClassVar[bool] = False
 
     @classmethod
     def from_string(cls, mark: str) -> "LetteredStropheMark":
@@ -189,6 +202,20 @@ class LetteredStropheMark(StropheMark):
         return self.letter
 
 
+@dataclasses.dataclass(eq=True, frozen=True)
+class NumberedChorusMark(StropheMark):
+    number: int
+    is_chorus: ClassVar[bool] = True
+
+    @classmethod
+    def from_string(cls, mark: str) -> "NumberedChorusMark":
+        return cls(int(mark.lstrip("R")))
+
+    def to_string(self, short: bool) -> str:
+        return f"R{self.number}" if short else f"Chorus {self.number}"
+
+
+@dataclasses.dataclass(eq=True, frozen=True)  # makes all instances of the same class equal (no attrs)
 class InvariantStropheMark(StropheMark):
     @classmethod
     def from_string(cls, mark: str) -> "InvariantStropheMark":
@@ -200,16 +227,50 @@ class InvariantStropheMark(StropheMark):
 
 
 class ChorusMark(InvariantStropheMark):
+    is_chorus: ClassVar[bool] = True
+
     def to_string(self, short: bool) -> str:
         return "R" if short else "Chorus"
 
 
+class IntroMark(InvariantStropheMark):
+    is_chorus: ClassVar[bool] = False
+
+    def to_string(self, short: bool) -> str:
+        return "Intro"
+
+
+class BridgeMark(InvariantStropheMark):
+    is_chorus: ClassVar[bool] = False
+
+    def to_string(self, short: bool) -> str:
+        return "M" if short else "Bridge"
+
+
+class SoloMark(InvariantStropheMark):
+    is_chorus: ClassVar[bool] = False
+
+    def to_string(self, short: bool) -> str:
+        return "Solo"
+
+
+class RecitationMark(InvariantStropheMark):
+    is_chorus: ClassVar[bool] = False
+
+    def to_string(self, short: bool) -> str:
+        return "Rec"
+
+
 class CodaMark(InvariantStropheMark):
+    is_chorus: ClassVar[bool] = False
+
     def to_string(self, short: bool) -> str:
         return "C" if short else "Coda"
 
 
 class EmptyStropheMark(InvariantStropheMark):
+    is_chorus: ClassVar[bool] = False
+
     def to_string(self, short: bool) -> str:
         return ""
 
@@ -221,6 +282,26 @@ class Strophe:
 
     def single_line_segments(self) -> list[StropheSegment]:
         return [chunk for seg in self.segments for chunk in seg.splitlines()]
+
+
+class RepeatStropheWithSameMark(Strophe):
+    """A strophe that repeats some undefined previous strophe, to be determined by the strophe mark."""
+
+
+@dataclasses.dataclass
+class StropheRepeat(Strophe):
+    repeated_strophe: Strophe
+
+    def __init__(self, repeated_strophe: Strophe):
+        self.repeated_strophe = repeated_strophe
+
+    @property
+    def mark(self) -> StropheMark:
+        return self.repeated_strophe.mark
+
+    @property
+    def segments(self) -> list[StropheSegment]:
+        return self.repeated_strophe.segments  # TODO this brings up some trouble
 
 
 class Annotation(ABC):
@@ -237,7 +318,7 @@ class Annotation(ABC):
 @dataclasses.dataclass
 class AuthorAnnotation(Annotation):
     name: str
-    is_chord_annotation: bool = False
+    is_chord_annotation: ClassVar[bool] = False
 
     def to_string(self, delimiter: str) -> str:
         return "Author" + delimiter + self.name
@@ -246,7 +327,7 @@ class AuthorAnnotation(Annotation):
 @dataclasses.dataclass
 class TitleAnnotation(Annotation):
     title: str
-    is_chord_annotation: bool = False
+    is_chord_annotation: ClassVar[bool] = False
 
     def to_string(self, delimiter: str) -> str:
         return "Title" + delimiter + self.title
@@ -272,3 +353,45 @@ class Song:
 
     def get_annotations_of_type(self, annot_type: Type[A]) -> list[A]:
         return [annot for annot in self.annotations if isinstance(annot, annot_type)]
+
+    def get_title(self) -> str | None:
+        titles = [annot.title for annot in self.get_annotations_of_type(TitleAnnotation)]
+        if not titles:
+            return None
+        elif len(titles) > 1:
+            raise MalformedSongError("multiple song titles")
+        else:
+            return titles[0]
+
+    def get_displayable_annotations(
+        self,
+        exclude_types: frozenset[type[Annotation]] = frozenset([TitleAnnotation, AuthorAnnotation]),
+        chords: bool = True,
+    ) -> list[Annotation]:
+        return [
+            annot
+            for annot in self.annotations
+            if not isinstance(annot, tuple(exclude_types)) and (chords or not annot.is_chord_annotation)
+        ]
+
+    def normalized(self) -> "Song":
+        return Song(
+            annotations=copy.deepcopy(self.annotations),
+            items=self.link_strophe_repeats(copy.deepcopy(self.items)),
+        )
+
+    def link_strophe_repeats(self, items: list[Strophe | Annotation]) -> list[Strophe | Annotation]:
+        linked_items = []
+        for i, item in enumerate(items):
+            if isinstance(item, RepeatStropheWithSameMark):
+                if item.segments:
+                    raise NotImplementedError("cannot link strophe repeats with modifications")
+                for j, link_item in reversed(list(enumerate(items[:i]))):
+                    if isinstance(link_item, Strophe) and link_item.mark == item.mark:
+                        linked_items.append(StropheRepeat(repeated_strophe=link_item))
+                        break
+                else:
+                    raise ValueError(f"cannot find strophe of mark {item.mark} to repeat")
+            else:
+                linked_items.append(item)
+        return linked_items
