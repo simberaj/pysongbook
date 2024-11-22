@@ -1,6 +1,7 @@
 import abc
 import dataclasses
 import functools
+import json
 import warnings
 from abc import ABC
 import re
@@ -70,6 +71,11 @@ class TurnChordsOff(ProcessingInstruction):
 
 
 class SongFormat(ABC):
+    @property
+    @abc.abstractmethod
+    def name(self) -> str:
+        ...
+
     @property
     @abc.abstractmethod
     def can_read(self) -> bool:
@@ -145,6 +151,7 @@ class ModifiedSongsLatexChordParser(ChordParser):
 
 
 class DefaultFormat(SongFormat):
+    name = "default"
     can_read = True
     can_write = True
 
@@ -165,7 +172,7 @@ class DefaultFormat(SongFormat):
     strophe_mark_delimiters: list[str] = [default_strophe_mark_delimiter, ":"]
     direct_strophe_marks: dict[str, Type[StropheMark]] = {
         "R": ChorusMark,
-        "C": CodaMark,
+        # "C": CodaMark,  # coda recognition is done by normalization in the model
     }
     strophe_mark_patterns: list[tuple[re.Pattern, Type[StropheMark]]] = [
         (re.compile(r"\d+"), NumberedStropheMark),
@@ -313,6 +320,7 @@ class DefaultFormat(SongFormat):
 
 
 class AgamaFormat(DefaultFormat):
+    name = "agama"
     empty_line_pattern = re.compile(r"\n\s*\n")
     empty_startline_pattern = re.compile(r"^\s*\n")
 
@@ -386,6 +394,7 @@ class RepeatCount(ProcessingInstruction):
 
 
 class ModifiedSongsLatexFormat(SongFormat):
+    name = "latex-songs-modif"
     can_read = True
     can_write = True
 
@@ -407,6 +416,7 @@ class ModifiedSongsLatexFormat(SongFormat):
         "recite": RecitationMark,
     }
     simple_beginverse_command_names = {v(): k for k, v in simple_beginverse_commands.items()}
+    simple_beginverse_command_names[CodaMark()] = "cverse"
     numbered_beginverse_command = "num"
     beginverse_commands = [numbered_beginverse_command] + list(simple_beginverse_commands.keys())
     endverse_commands = ["fin", "cl"]
@@ -441,6 +451,7 @@ class ModifiedSongsLatexFormat(SongFormat):
         NumberedChorusMark(number=1): "repchorusi",
         NumberedChorusMark(number=2): "repchorusii",
     }
+    no_chord_brace_length_multiple = 1.75
 
     def loads(self, song_text: str) -> Song:
         annotations, remnant = self._parse_beginsong(song_text)
@@ -777,15 +788,17 @@ class ModifiedSongsLatexFormat(SongFormat):
             if isinstance(seg, ChordedSegment) and chords:
                 if isinstance(prev_seg, PlainSegment):
                     dumped.append("\n\\chordson\n")
-                dumped.append(f"\\[{self.dump_chord(seg.chord)}]")
+                dumped_chord = self.dump_chord(seg.chord)
+                dumped.append(f"\\[{dumped_chord}]")
                 if seg.text and not seg.text.isspace():
                     if "\n" in seg.text:
                         first_line, other_lines = seg.text.split("\n", maxsplit=1)
                         if first_line:
-                            dumped.append("{" + self.dump_text(first_line) + "}\\\\\n")
+                            dumped.append(self._dump_chorded_text(first_line, len(dumped_chord)))
+                            dumped.append("\\\\\n")
                         dumped.append(self.dump_text(other_lines))
                     else:
-                        dumped.append("{" + self.dump_text(seg.text) + "}")
+                        dumped.append(self._dump_chorded_text(seg.text, len(dumped_chord)))
             elif isinstance(seg, PlainSegment) or (isinstance(seg, ChordedSegment) and not chords):
                 if chords and isinstance(prev_seg, ChordedSegment):
                     dumped.append("\n\\chordsoff\n")
@@ -794,6 +807,14 @@ class ModifiedSongsLatexFormat(SongFormat):
                 raise ValueError(f"unknown segment type: {seg}")
             prev_seg = seg
         return "".join(dumped).replace("\n\n", "\n")
+
+    def _dump_chorded_text(self, text: str, chord_length: int) -> str:
+        dumped_text = self.dump_text(text)
+        if len(text.split()[0]) >= chord_length * self.no_chord_brace_length_multiple:
+            return dumped_text
+        noendspaced_text = dumped_text.rstrip()
+        tail = "" if noendspaced_text == dumped_text else dumped_text[-(len(dumped_text)-len(noendspaced_text)):]
+        return "{" + noendspaced_text + "}" + tail
 
     def dump_chord(self, chord: Chord) -> str:
         modif_groups = []
@@ -815,6 +836,15 @@ class ModifiedSongsLatexFormat(SongFormat):
         for pat, sub in self.text_dump_repls.items():
             some_text = some_text.replace(pat, sub)
         return some_text
+
+
+class ModelDictFormat(SongFormat):
+    name = "dict"
+    can_read = False
+    can_write = True
+
+    def dumps(self, song: Song) -> str:
+        return json.dumps(dataclasses.asdict(song))
 
 
 def process_chords_on_instructions(annots: list[Annotation]) -> tuple[bool | None, list[Annotation]]:
@@ -840,8 +870,8 @@ if __name__ == "__main__":
     # pprint.pprint(song)
     # print(DefaultFormat().dumps(song))
     # print(AgamaFormat().dumps(song))
-    ahoj_slunko_path = Path(__file__).parent.parent / "test" / "data" / "1plus1.tex"
-    # ahoj_slunko_path = Path(__file__).parent.parent / "test" / "data" / "ahoj_slunko.tex"
+    # ahoj_slunko_path = Path(__file__).parent.parent / "test" / "data" / "1plus1.tex"
+    ahoj_slunko_path = Path(__file__).parent.parent / "test" / "data" / "ahoj_slunko.tex"
     with ahoj_slunko_path.open(encoding="utf8") as f:
         test_song = ModifiedSongsLatexFormat().loads(f.read())
     pprint.pprint(test_song)
@@ -855,16 +885,3 @@ if __name__ == "__main__":
 # TODO annotation parsing
 # TODO commandline interface
 # TODO remaining songs-latex-modif features (verse repetition, music notes, tablatures)
-
-# TODO model-level adjustments:
-# TODO resolve coda / c-strophe
-# TODO implicit chorus repetition (1, R, 2, 3, 4) -> (1, R, 2, R, 3, R, 4, R)
-# TODO initial plain segments (chord from previous verse / chorus)
-    #         # TODO the following would work if not for implicit chorus repetition; even then, better leave this to
-    #         # TODO modifications within the model, not to parsing stage
-    #         # strophes: list[tuple[int, Strophe]] = [(i, item) for i, item in enumerate(items) if isinstance(item, Strophe)]
-    #         # for prev, current in zip(strophes[:-1], strophes[1:]):
-    #         #     prev_i, prev_strophe = prev
-    #         #     cur_i, cur_strophe = current
-    #         #     if cur_strophe.segments and isinstance(cur_strophe.segments[0], PlainSegment):
-    #         #         if prev_strophe.segments and

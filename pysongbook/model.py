@@ -1,4 +1,5 @@
 import abc
+import collections
 import copy
 from abc import ABC
 import dataclasses
@@ -377,10 +378,11 @@ class Song:
     def normalized(self) -> "Song":
         return Song(
             annotations=copy.deepcopy(self.annotations),
-            items=self.link_strophe_repeats(copy.deepcopy(self.items)),
+            items=self._fill_initial_plain_segments(self._recognize_codas(self._infer_chorus_repetition(self._link_strophe_repeats(copy.deepcopy(self.items))))),
         )
 
-    def link_strophe_repeats(self, items: list[Strophe | Annotation]) -> list[Strophe | Annotation]:
+    @staticmethod
+    def _link_strophe_repeats(items: list[Strophe | Annotation]) -> list[Strophe | Annotation]:
         linked_items = []
         for i, item in enumerate(items):
             if isinstance(item, RepeatStropheWithSameMark):
@@ -395,3 +397,41 @@ class Song:
             else:
                 linked_items.append(item)
         return linked_items
+
+    @staticmethod
+    def _infer_chorus_repetition(items: list[Strophe | Annotation]) -> list[Strophe | Annotation]:
+        strophe_types = [type(item.mark) for item in items if isinstance(item, Strophe)]
+        if len(strophe_types) <= 2 or len(strophe_types) < len(items):
+            return items
+        type_pattern = [NumberedStropheMark, ChorusMark] + [NumberedStropheMark] * (len(strophe_types) - 2)
+        if strophe_types == type_pattern:
+            # Inlay chorus repetition after the second and each subsequent strophe.
+            repeat_chorus = StropheRepeat(items[1])
+            inlaid = items[:2] + [item for strophe in items[2:] for item in (strophe, repeat_chorus)]
+            return inlaid
+        return items
+
+    @staticmethod
+    def _fill_initial_plain_segments(items: list[Strophe | Annotation]) -> list[Strophe | Annotation]:
+        replacements = []
+        strophes: list[tuple[int, Strophe]] = [(i, item) for i, item in enumerate(items) if isinstance(item, Strophe)]
+        for prev, current in zip(strophes[:-1], strophes[1:]):
+            prev_i, prev_strophe = prev
+            cur_i, cur_strophe = current
+            if cur_strophe.segments and isinstance(cur_strophe.segments[0], PlainSegment):
+                if prev_strophe.segments and isinstance(prev_strophe.segments[-1], ChordedSegment):
+                    replacements.append(
+                        (cur_i, ChordedSegment(chord=prev_strophe.segments[-1].chord, text=cur_strophe.segments[0].text))
+                    )
+        for item_i, repl in replacements:
+            items[item_i].segments[0] = repl
+        return items
+
+    @staticmethod
+    def _recognize_codas(items: list[Strophe | Annotation]) -> list[Strophe | Annotation]:
+        marks = [(i, item.mark) for i, item in enumerate(items) if isinstance(item, Strophe)]
+        letter_counts = collections.Counter(mark.letter for i, mark in marks if isinstance(mark, LetteredStropheMark))
+        if letter_counts == {"C": 1} and marks[-1][1] == LetteredStropheMark("C"):
+            items[marks[-1][0]].mark = CodaMark()
+            return items
+        return items

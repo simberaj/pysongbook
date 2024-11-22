@@ -7,7 +7,7 @@ license = "MIT"
 readme = "README.md"
 
 [tool.poetry.dependencies]
-python = "^3.10"
+python = "^3.11"
 
 [tool.poetry.group.dev.dependencies]
 # Linter and formatter
@@ -35,7 +35,7 @@ pytest-mock = "^3.11.1"
 
 # https://mypy.readthedocs.io/en/latest/config_file.html#using-a-pyproject-toml-file
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 follow_imports = "silent"
 warn_return_any = true
 warn_unused_ignores = true
@@ -116,7 +116,7 @@ lint.select = [
 ]
 cache-dir = ".cache/ruff"
 line-length = 120
-target-version = "py310"
+target-version = "py311"
 output-format = "grouped"
 lint.ignore-init-module-imports = true
 [tool.ruff.lint.pyupgrade]
