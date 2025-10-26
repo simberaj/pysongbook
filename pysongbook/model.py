@@ -156,7 +156,7 @@ class ChordedSegment(StropheSegment):
         plain_split = PlainSegment(self.text).splitlines()
         if not plain_split:
             return [self]
-        return [self.__class__(chord=self.chord, text=plseg.text) for plseg in plain_split]
+        return [type(self)(chord=self.chord, text=plseg.text) for plseg in plain_split]
 
 
 class StropheMark(ABC):
@@ -386,14 +386,22 @@ class Song:
         linked_items = []
         for i, item in enumerate(items):
             if isinstance(item, RepeatStropheWithSameMark):
-                if item.segments:
-                    raise NotImplementedError("cannot link strophe repeats with modifications")
                 for j, link_item in reversed(list(enumerate(items[:i]))):
                     if isinstance(link_item, Strophe) and link_item.mark == item.mark:
-                        linked_items.append(StropheRepeat(repeated_strophe=link_item))
                         break
                 else:
                     raise ValueError(f"cannot find strophe of mark {item.mark} to repeat")
+                if item.segments:
+                    first_segment_text = item.segments[0].text
+                    for i, seg in enumerate(link_item.segments):
+                        if first_segment_text in seg.text:
+                            break
+                    break_segment = dataclasses.replace(seg, text=seg.text[:seg.text.find(first_segment_text)])
+                    result_segments = link_item.segments[:i] + [break_segment] + item.segments
+                    result_item = Strophe(mark=item.mark, segments=result_segments)
+                else:
+                    result_item = StropheRepeat(repeated_strophe=link_item)
+                linked_items.append(result_item)
             else:
                 linked_items.append(item)
         return linked_items
@@ -418,11 +426,17 @@ class Song:
         for prev, current in zip(strophes[:-1], strophes[1:]):
             prev_i, prev_strophe = prev
             cur_i, cur_strophe = current
-            if cur_strophe.segments and isinstance(cur_strophe.segments[0], PlainSegment):
-                if prev_strophe.segments and isinstance(prev_strophe.segments[-1], ChordedSegment):
-                    replacements.append(
-                        (cur_i, ChordedSegment(chord=prev_strophe.segments[-1].chord, text=cur_strophe.segments[0].text))
-                    )
+            can_replace = (
+                cur_strophe.segments
+                and isinstance(cur_strophe.segments[0], PlainSegment)
+                and any(isinstance(seg, ChordedSegment) for seg in cur_strophe.segments)
+                and prev_strophe.segments
+                and isinstance(prev_strophe.segments[-1], ChordedSegment)
+            )
+            if can_replace:
+                replacements.append(
+                    (cur_i, ChordedSegment(chord=prev_strophe.segments[-1].chord, text=cur_strophe.segments[0].text))
+                )
         for item_i, repl in replacements:
             items[item_i].segments[0] = repl
         return items

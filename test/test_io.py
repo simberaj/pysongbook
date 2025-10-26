@@ -1,19 +1,27 @@
+import warnings
 from pathlib import Path
 
-from pysongbook.io import ModifiedSongsLatexChordParser, DefaultChordParser
+from pysongbook.io import ModifiedSongsLatexChordParser, DefaultChordParser, ModifiedSongsLatexFormat
 
 import pytest
 
-# ahoj_slunko_path = Path(__file__).parent / "data" / "ahoj_slunko.txt"
+chords_path = Path(__file__).parent / "data"
 
-# TODO install pytest
-# @pytest.fixture(scope="session")
-# def ahoj_slunko_text():
-#     with ahoj_slunko_path.open() as f:
-#         return f.read()
+@pytest.fixture(scope="session")
+def song_texts() -> list[str]:
+    texts = [
+        path.open(encoding="utf8").read()
+        for path in chords_path.iterdir()
+        if path.suffix == ".tex"
+    ]
+    return texts
 
-# with ahoj_slunko_path.open() as f:
-#     ahoj_slunko_text = f.read()
+
+def test_modif_songs_latex_parser(song_texts):
+    format = ModifiedSongsLatexFormat()
+    for text in song_texts:
+        song = format.loads(text).normalized()
+        format.dumps(song, chords=True)
 
 
 @pytest.mark.parametrize("latex, normal", [

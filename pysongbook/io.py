@@ -438,11 +438,14 @@ class ModifiedSongsLatexFormat(SongFormat):
         "ldots": [PlainSegment("...")],
         "endsong": [],
     }
-    text_load_repls = {
+    text_load_repls: dict[str, str] = {
         "~-- ": " - ",
         " -- ": " - ",
     }
-    text_dump_repls = {v: k for k, v in text_load_repls.items()} | {
+    text_load_patterns: dict[re.Pattern, str] = {
+        re.compile(r"\s+\n"): "\n"
+    }
+    text_dump_repls: dict[str, str] = {v: k for k, v in text_load_repls.items()} | {
         "\n": "\\\\\n",
         "...": "\\ldots{}",
     }
@@ -652,6 +655,8 @@ class ModifiedSongsLatexFormat(SongFormat):
     def _handle_parsed_text(self, parsed: str) -> PlainSegment:
         for pat, sub in self.text_load_repls.items():
             parsed = parsed.replace(pat, sub)
+        for pat, sub in self.text_load_patterns.items():
+            parsed = pat.sub(sub, parsed)
         return PlainSegment(parsed)
 
     def _parse_chord_chunk(self, text: str, pos: int) -> tuple[StropheSegment, int]:
@@ -679,7 +684,7 @@ class ModifiedSongsLatexFormat(SongFormat):
 
     def _parse_chord_mark(self, text: str, pos: int) -> tuple[Chord, int]:
         if not text[pos:].startswith("\\["):
-            raise PositionalSongParseError("expecting chord start (\[)", text, pos)
+            raise PositionalSongParseError("expecting chord start (\\[)", text, pos)
         pos += 2
         next_ending = text[pos:].find("]")  # TODO turn into a param
         if next_ending == -1:
@@ -736,7 +741,6 @@ class ModifiedSongsLatexFormat(SongFormat):
                 yield self.dump_annotation(item)
             elif isinstance(item, StropheRepeat):
                 accummulated_repeats.append(item)
-                print(i, item, len(song.items))
                 if i + 1 == len(song.items) or not isinstance(song.items[i+1], StropheRepeat) or song.items[i+1].repeated_strophe != item.repeated_strophe:
                     yield self.dump_strophe_repeat(accummulated_repeats[0], chords=chords, n=len(accummulated_repeats))
                     accummulated_repeats = []
@@ -747,8 +751,6 @@ class ModifiedSongsLatexFormat(SongFormat):
         if isinstance(strophe, RepeatStropheWithSameMark):
             raise ValueError("cannot dump unlinked strophe repeat")
         elif isinstance(strophe, StropheRepeat):
-
-
             return ""
         beginverse = self.dump_beginverse(strophe.mark)
         endverse = "\\fin" if isinstance(strophe.mark, NumberedStropheMark) else "\\cl"
@@ -864,22 +866,33 @@ if __name__ == "__main__":
     from pathlib import Path
     import pprint
 
-    # ahoj_slunko_path = Path(__file__).parent.parent / "test" / "data" / "ahoj_slunko.txt"
+    chords_path = Path(__file__).parent.parent / "test" / "data"
+    format = ModifiedSongsLatexFormat()
+    for path in chords_path.iterdir():
+        if path.suffix == ".tex" and "1970" in str(path):
+            text = path.open(encoding="utf8").read()
+            print(text)
+            song = format.loads(text).normalized()
+            pprint.pprint(song)
+            result = format.dumps(song, chords=True)
+            print(result)
+
+    # # ahoj_slunko_path = Path(__file__).parent.parent / "test" / "data" / "ahoj_slunko.txt"
+    # # with ahoj_slunko_path.open(encoding="utf8") as f:
+    # #     song = DefaultFormat().loads(f.read())
+    # # pprint.pprint(song)
+    # # print(DefaultFormat().dumps(song))
+    # # print(AgamaFormat().dumps(song))
+    # # ahoj_slunko_path = Path(__file__).parent.parent / "test" / "data" / "1plus1.tex"
+    # ahoj_slunko_path = Path(__file__).parent.parent / "test" / "data" / "ahoj_slunko.tex"
     # with ahoj_slunko_path.open(encoding="utf8") as f:
-    #     song = DefaultFormat().loads(f.read())
-    # pprint.pprint(song)
-    # print(DefaultFormat().dumps(song))
-    # print(AgamaFormat().dumps(song))
-    # ahoj_slunko_path = Path(__file__).parent.parent / "test" / "data" / "1plus1.tex"
-    ahoj_slunko_path = Path(__file__).parent.parent / "test" / "data" / "ahoj_slunko.tex"
-    with ahoj_slunko_path.open(encoding="utf8") as f:
-        test_song = ModifiedSongsLatexFormat().loads(f.read())
-    pprint.pprint(test_song)
-    normalized_song = test_song.normalized()
-    pprint.pprint(normalized_song)
-    print(ModifiedSongsLatexFormat().dumps(normalized_song))
-    # print(DefaultFormat().dumps(test_song))
-    # print(AgamaFormat().dumps(song))
+    #     test_song = ModifiedSongsLatexFormat().loads(f.read())
+    # pprint.pprint(test_song)
+    # normalized_song = test_song.normalized()
+    # pprint.pprint(normalized_song)
+    # print(ModifiedSongsLatexFormat().dumps(normalized_song))
+    # # print(DefaultFormat().dumps(test_song))
+    # # print(AgamaFormat().dumps(song))
 
 # TODO repetitions
 # TODO annotation parsing
