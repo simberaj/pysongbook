@@ -1,11 +1,11 @@
 import abc
+from abc import ABC
+from collections.abc import Callable, Generator
 import dataclasses
 import functools
 import json
-import warnings
-from abc import ABC
 import re
-from typing import Callable, Generator, Type, Any
+import warnings
 
 from pysongbook.model import (
     AddedNote,
@@ -13,6 +13,7 @@ from pysongbook.model import (
     Annotation,
     AuthorAnnotation,
     BassNote,
+    BridgeMark,
     Chord,
     ChordedSegment,
     ChordModifier,
@@ -21,18 +22,26 @@ from pysongbook.model import (
     DominantSeventh,
     EmptyStropheMark,
     GenericChordModifier,
+    IndeterminateChordingSegment,
+    IntroMark,
     LetteredStropheMark,
     MajorSeventh,
     Minor,
+    NumberedChorusMark,
     NumberedStropheMark,
-    PlainSegment,
+    RecitationMark,
+    RepeatStropheWithSameMark,
+    SimpleStropheRepeat,
+    SoloMark,
     Song,
     Strophe,
     StropheMark,
+    StropheRepeat,
     StropheSegment,
     Suspended,
-    TitleAnnotation, IntroMark, SoloMark, BridgeMark, NumberedChorusMark, RecitationMark, RepeatStropheWithSameMark,
-    StropheRepeat,
+    TitleAnnotation,
+    UnchordedSegment,
+    UnknownChordSegment,
 )
 
 
@@ -48,7 +57,7 @@ class PositionalSongParseError(ValueError):
     def __init__(self, issue: str, text: str, pos: int):
         self.issue = issue
         self.pos = pos
-        super().__init__(f"{issue} around {text[pos-10:pos+10]!r} at {text[pos:pos+10]!r} (index {pos})")
+        super().__init__(f"{issue} around {text[pos - 10 : pos + 10]!r} at {text[pos : pos + 10]!r} (index {pos})")
 
 
 class SongSerializationWarning(UserWarning):
@@ -73,18 +82,15 @@ class TurnChordsOff(ProcessingInstruction):
 class SongFormat(ABC):
     @property
     @abc.abstractmethod
-    def name(self) -> str:
-        ...
+    def name(self) -> str: ...
 
     @property
     @abc.abstractmethod
-    def can_read(self) -> bool:
-        ...
+    def can_read(self) -> bool: ...
 
     @property
     @abc.abstractmethod
-    def can_write(self) -> bool:
-        ...
+    def can_write(self) -> bool: ...
 
 
 def _parse_altered_modifier_match(match: re.Match) -> Altered:
@@ -170,11 +176,11 @@ class DefaultFormat(SongFormat):
     ]
     heading_markers: list[str] = [default_heading_marker, ": "]
     strophe_mark_delimiters: list[str] = [default_strophe_mark_delimiter, ":"]
-    direct_strophe_marks: dict[str, Type[StropheMark]] = {
+    direct_strophe_marks: dict[str, type[StropheMark]] = {
         "R": ChorusMark,
         # "C": CodaMark,  # coda recognition is done by normalization in the model
     }
-    strophe_mark_patterns: list[tuple[re.Pattern, Type[StropheMark]]] = [
+    strophe_mark_patterns: list[tuple[re.Pattern, type[StropheMark]]] = [
         (re.compile(r"\d+"), NumberedStropheMark),
         (re.compile(r"[A-E]+"), LetteredStropheMark),
     ]
@@ -231,7 +237,7 @@ class DefaultFormat(SongFormat):
     def _parse_strophe(self, part: str) -> Strophe:
         mark, body = self._parse_strophe_mark(part)
         pieces = self._normalize_strophe_whitespace(body).split(self.chord_start_mark)
-        segments: list[StropheSegment] = [PlainSegment(pieces[0])] if pieces[0] else []
+        segments: list[StropheSegment] = [UnchordedSegment(pieces[0])] if pieces[0] else []
         for piece in pieces[1:]:
             if self.chord_end_mark not in piece:
                 raise SongParseError("mismatched chord start/end marks")  # todo better info on where it occurred
@@ -354,7 +360,7 @@ class AgamaFormat(DefaultFormat):
                 chord_lines.append([])
                 main_lines.append([])
         chord_lines[-1][-1] = chord_lines[-1][-1].rstrip() + "\n"
-        return "".join("".join(line) for line_pair in zip(chord_lines, main_lines) for line in line_pair)
+        return "".join("".join(line) for line_pair in zip(chord_lines, main_lines, strict=False) for line in line_pair)
 
     def dump_segment(self, seg: StropheSegment, chords: bool = True) -> str:
         if chords:
@@ -401,7 +407,7 @@ class ModifiedSongsLatexFormat(SongFormat):
     beginsong_pattern = re.compile(r"\s*\\beginsong\{(?P<title>[^}]+?)}(?:\[(?P<annots>[^]]+?)])?")
     beginsong_annot_pattern = re.compile(r"(?P<key>[a-z]+)=\{(?P<value>[^}]*?)}")
     beginsong_annot_keys = {"by": AuthorAnnotation}
-    simple_beginverse_commands: dict[str, Type[StropheMark]] = {
+    simple_beginverse_commands: dict[str, type[StropheMark]] = {
         "emptyv": EmptyStropheMark,
         "freev": EmptyStropheMark,
         "chor": ChorusMark,
@@ -425,7 +431,7 @@ class ModifiedSongsLatexFormat(SongFormat):
     strophe_token_pattern = re.compile(r"([]\\[{}])")
     command_name_pattern = re.compile(r"\w+")
     whitespace_pattern = re.compile(r"\s+")
-    noop_commands = ["emptyspace", r"\\"]
+    noop_commands = ["emptyspace", r"\\", "qquad"]
     chord_parser = ModifiedSongsLatexChordParser()
     chord_level_commands = {
         0: "{}",
@@ -435,16 +441,14 @@ class ModifiedSongsLatexFormat(SongFormat):
     simple_text_commands = {
         "chordson": [TurnChordsOn()],
         "chordsoff": [TurnChordsOff()],
-        "ldots": [PlainSegment("...")],
+        "ldots": [IndeterminateChordingSegment("...")],
         "endsong": [],
     }
     text_load_repls: dict[str, str] = {
         "~-- ": " - ",
         " -- ": " - ",
     }
-    text_load_patterns: dict[re.Pattern, str] = {
-        re.compile(r"\s+\n"): "\n"
-    }
+    text_load_patterns: dict[re.Pattern, str] = {re.compile(r"\s+\n"): "\n"}
     text_dump_repls: dict[str, str] = {v: k for k, v in text_load_repls.items()} | {
         "\n": "\\\\\n",
         "...": "\\ldots{}",
@@ -455,6 +459,7 @@ class ModifiedSongsLatexFormat(SongFormat):
         NumberedChorusMark(number=2): "repchorusii",
     }
     no_chord_brace_length_multiple = 1.75
+    no_chord_brace_length = 3
 
     def loads(self, song_text: str) -> Song:
         annotations, remnant = self._parse_beginsong(song_text)
@@ -500,10 +505,10 @@ class ModifiedSongsLatexFormat(SongFormat):
                 annotations.append(self.beginsong_annot_keys[key](value))
             else:
                 warnings.warn(f"unknown \\beginsong annotation key: {key}={value}")
-            other_annot_str = other_annot_str[annot_match.end():]
+            other_annot_str = other_annot_str[annot_match.end() :]
         if other_annot_str:
             warnings.warn(f"unprocessed \\beginsong content: {other_annot_str!r}", category=SongParseWarning)
-        return annotations, song_text[match.end():].lstrip()
+        return annotations, song_text[match.end() :].lstrip()
 
     def _parse_annotations(self, annot_str: str) -> list[Annotation]:
         raw = self._parse_annotation_chunk(annot_str)
@@ -521,6 +526,14 @@ class ModifiedSongsLatexFormat(SongFormat):
             part_results, current_pos = self._parse_command_chunk(annot_str, pos=current_pos)
             for result in part_results:
                 if isinstance(result, EmbeddedStrophe | Annotation):
+                    if isinstance(result, EmbeddedStrophe):
+                        result = EmbeddedStrophe(
+                            type(result.strophe)(
+                                mark=result.strophe.mark,
+                                # chords_on=True here to allow chorded segment merging
+                                segments=self._join_strophe_segments(result.strophe.segments, chords_on=True),
+                            )
+                        )
                     strophes_and_annots.append(result)
                 else:
                     raise ValueError(f"invalid annotation chunk content: {result!r} from {annot_str!r}")
@@ -544,7 +557,7 @@ class ModifiedSongsLatexFormat(SongFormat):
     def _parse_strophe(self, strophe_str: str, num: int, chords_on: bool) -> tuple[Strophe, list[Annotation]]:
         mark_str = re.match(r"\w+", strophe_str).group()
         mark = self._parse_strophe_mark(mark_str, num=num)
-        parts = self.endverse_pattern.split(strophe_str[len(mark_str):])
+        parts = self.endverse_pattern.split(strophe_str[len(mark_str) :])
         if len(parts) != 2:
             raise SongParseError("mismatched strophe start/end commands")
         body, afterpart = [part.strip() for part in parts]
@@ -587,9 +600,27 @@ class ModifiedSongsLatexFormat(SongFormat):
             elif isinstance(segments[seg_i], TurnChordsOff):
                 current_chords_on = False
                 segments.pop(seg_i)
-            elif current_chords_on and isinstance(segments[seg_i], PlainSegment) and seg_i > 0 and isinstance(segments[seg_i-1], ChordedSegment):
-                segments[seg_i - 1].text += segments[seg_i].text
-                segments.pop(seg_i)
+            elif isinstance(segments[seg_i], IndeterminateChordingSegment):
+                if seg_i > 0 and (
+                    (current_chords_on and isinstance(segments[seg_i - 1], ChordedSegment | UnknownChordSegment))
+                    or (not current_chords_on and isinstance(segments[seg_i - 1], UnchordedSegment))
+                ):
+                    # merge the segment to the preceding one based on the preceding one's type:
+                    # chorded/unknownchord: merge if chords on
+                    # unchorded: merge if chords off
+                    joined_text = segments[seg_i - 1].text + segments[seg_i].text
+                    if isinstance(segments[seg_i - 1], ChordedSegment):
+                        segments[seg_i - 1] = ChordedSegment(chord=segments[seg_i - 1].chord, text=joined_text)
+                    else:
+                        segments[seg_i - 1] = segments[seg_i - 1].__class__(text=joined_text)
+                    segments.pop(seg_i)
+                else:
+                    # an indeterminate segment at the start of a strophe (or barred from merging with the previous
+                    # segment, e.g. by change of chords_on): if chords are on, it should have a chord but does
+                    # not, so marking as unknown chord segment; otherwise it is meant to be unchorded
+                    ctype = UnknownChordSegment if current_chords_on else UnchordedSegment
+                    segments[seg_i] = ctype(text=segments[seg_i].text)
+                    seg_i += 1
             else:
                 seg_i += 1
         return segments
@@ -618,7 +649,9 @@ class ModifiedSongsLatexFormat(SongFormat):
         else:
             inner = []
             # skip whitespace after command name if no braces present
-            after_pos = post_command_name_pos + (len(text[post_command_name_pos:]) - len(text[post_command_name_pos:].lstrip()))
+            after_pos = post_command_name_pos + (
+                len(text[post_command_name_pos:]) - len(text[post_command_name_pos:].lstrip())
+            )
         if command_name in self.simple_text_commands:
             if inner:
                 raise PositionalSongParseError("nonempty contents of simple command", text, pos)
@@ -643,7 +676,7 @@ class ModifiedSongsLatexFormat(SongFormat):
             after_plain_pos = after_chord_pos
         return segments, after_plain_pos
 
-    def _parse_text_chunk(self, text: str, pos: int) -> tuple[PlainSegment | None, int]:
+    def _parse_text_chunk(self, text: str, pos: int) -> tuple[IndeterminateChordingSegment | None, int]:
         split_result = self.strophe_token_pattern.split(text[pos:], maxsplit=1)
         if len(split_result) == 1:  # no more token splitters, all the rest is plain
             return self._handle_parsed_text(text[pos:]), len(text)
@@ -652,19 +685,19 @@ class ModifiedSongsLatexFormat(SongFormat):
             return self._handle_parsed_text(pretoken), pos + len(pretoken)
         return None, pos
 
-    def _handle_parsed_text(self, parsed: str) -> PlainSegment:
+    def _handle_parsed_text(self, parsed: str) -> IndeterminateChordingSegment:
         for pat, sub in self.text_load_repls.items():
             parsed = parsed.replace(pat, sub)
         for pat, sub in self.text_load_patterns.items():
             parsed = pat.sub(sub, parsed)
-        return PlainSegment(parsed)
+        return IndeterminateChordingSegment(parsed)
 
     def _parse_chord_chunk(self, text: str, pos: int) -> tuple[StropheSegment, int]:
         chord, after_chord_pos = self._parse_chord_mark(text, pos)
         if after_chord_pos < len(text) and text[after_chord_pos].startswith("{"):
             inner_chunk, after_brace_pos = self._parse_curly_parens(text, after_chord_pos)
             # this inner chunk should be a simple plain segment
-            if len(inner_chunk) != 1 or not isinstance(inner_chunk[0], PlainSegment):
+            if len(inner_chunk) != 1 or not isinstance(inner_chunk[0], IndeterminateChordingSegment):
                 raise PositionalSongParseError("non-plain chord scope parentheses content", text, after_chord_pos)
             inner_text = inner_chunk[0].text
         else:
@@ -686,10 +719,10 @@ class ModifiedSongsLatexFormat(SongFormat):
         if not text[pos:].startswith("\\["):
             raise PositionalSongParseError("expecting chord start (\\[)", text, pos)
         pos += 2
-        next_ending = text[pos:].find("]")  # TODO turn into a param
+        next_ending = text[pos:].find("]")
         if next_ending == -1:
             raise PositionalSongParseError("unterminated chord", text, pos)
-        chord = self.chord_parser.parse(text[pos:pos+next_ending])
+        chord = self.chord_parser.parse(text[pos : pos + next_ending])
         return chord, pos + next_ending + 1
 
     @staticmethod
@@ -703,9 +736,11 @@ class ModifiedSongsLatexFormat(SongFormat):
         emb_strophe = EmbeddedStrophe(RepeatStropheWithSameMark(mark=mark, segments=segs))
         return [emb_strophe] * n_repeats
 
-    complex_text_commands: Callable[[list[StropheSegment | ProcessingInstruction]], list[StropheSegment | ProcessingInstruction]] = {
+    complex_text_commands: Callable[
+        [list[StropheSegment | ProcessingInstruction]], list[StropheSegment | ProcessingInstruction]
+    ] = {
         "cseq": (lambda segs: segs),
-        "uv": (lambda segs: [PlainSegment('"')] + segs + [PlainSegment('"')]),
+        "uv": (lambda segs: [IndeterminateChordingSegment('"')] + segs + [IndeterminateChordingSegment('"')]),
         "rep": (lambda segs: [RepeatCount(int(segs[0].text))]),
         "repchorus": functools.partial(_parse_repchorus, n=None),
         "repchorusi": functools.partial(_parse_repchorus, n=1),
@@ -718,12 +753,16 @@ class ModifiedSongsLatexFormat(SongFormat):
         if annot_part:
             parts.append(annot_part)
         parts.extend(self.dump_song_items(song, chords=chords))
+        parts.append(self.dump_endsong(song))
         return "\n".join(parts)
 
     def dump_beginsong(self, song: Song) -> str:
         authors = [auth_annot.name for auth_annot in song.get_annotations_of_type(AuthorAnnotation)]
         meta = f"[by={{{', '.join(authors)}}}]" if authors else ""  # TODO more annotation types to cover songs meta tag
         return f"\\beginsong{{{song.get_title()}}}{meta}\n\\chordsoff"
+
+    def dump_endsong(self, song: Song) -> str:
+        return "\\endsong"
 
     def dump_annotations(self, song: Song, chords: bool = True) -> str:
         rem_annots = song.get_displayable_annotations(chords=chords)
@@ -741,8 +780,15 @@ class ModifiedSongsLatexFormat(SongFormat):
                 yield self.dump_annotation(item)
             elif isinstance(item, StropheRepeat):
                 accummulated_repeats.append(item)
-                if i + 1 == len(song.items) or not isinstance(song.items[i+1], StropheRepeat) or song.items[i+1].repeated_strophe != item.repeated_strophe:
-                    yield self.dump_strophe_repeat(accummulated_repeats[0], chords=chords, n=len(accummulated_repeats))
+                # TODO handle modified strophe repeats
+                if (
+                    i + 1 == len(song.items)
+                    or not isinstance(song.items[i + 1], SimpleStropheRepeat)
+                    or song.items[i + 1].repeated_strophe != item.repeated_strophe
+                ):
+                    yield self.dump_simple_strophe_repeat(
+                        accummulated_repeats[0], chords=chords, n=len(accummulated_repeats)
+                    )
                     accummulated_repeats = []
             else:
                 yield self.dump_strophe(item, chords=chords)
@@ -750,19 +796,17 @@ class ModifiedSongsLatexFormat(SongFormat):
     def dump_strophe(self, strophe: Strophe, chords: bool) -> str:
         if isinstance(strophe, RepeatStropheWithSameMark):
             raise ValueError("cannot dump unlinked strophe repeat")
-        elif isinstance(strophe, StropheRepeat):
+        elif isinstance(strophe, SimpleStropheRepeat):
             return ""
         beginverse = self.dump_beginverse(strophe.mark)
         endverse = "\\fin" if isinstance(strophe.mark, NumberedStropheMark) else "\\cl"
         content = self.dump_segments(strophe.segments, chords=chords)
-        parts = [beginverse, endverse]
         if content:
-            parts.insert(1, content)
-        return "\n".join(parts)
+            return "\n".join((beginverse, content, endverse))
+        else:
+            return beginverse + "\\emptyspace\\\\" + endverse
 
-    def dump_strophe_repeat(self, strophe: StropheRepeat, chords: bool, n: int = 1) -> str:
-        if strophe.segments != strophe.repeated_strophe.segments:
-            raise NotImplementedError("cannot dump strophe repeats with modifications")
+    def dump_simple_strophe_repeat(self, strophe: SimpleStropheRepeat, chords: bool, n: int = 1) -> str:
         _ = chords
         repcommand = self.repcommands[strophe.mark]
         inner = f"\\rep{{{n}}}" if n > 1 else ""
@@ -788,7 +832,7 @@ class ModifiedSongsLatexFormat(SongFormat):
             dumped.append("\\chordson\n")
         for seg in segments:
             if isinstance(seg, ChordedSegment) and chords:
-                if isinstance(prev_seg, PlainSegment):
+                if isinstance(prev_seg, UnchordedSegment):
                     dumped.append("\n\\chordson\n")
                 dumped_chord = self.dump_chord(seg.chord)
                 dumped.append(f"\\[{dumped_chord}]")
@@ -796,12 +840,12 @@ class ModifiedSongsLatexFormat(SongFormat):
                     if "\n" in seg.text:
                         first_line, other_lines = seg.text.split("\n", maxsplit=1)
                         if first_line:
-                            dumped.append(self._dump_chorded_text(first_line, len(dumped_chord)))
+                            dumped.append(self._dump_chorded_text(first_line, len(dumped_chord), endline=True))
                             dumped.append("\\\\\n")
                         dumped.append(self.dump_text(other_lines))
                     else:
                         dumped.append(self._dump_chorded_text(seg.text, len(dumped_chord)))
-            elif isinstance(seg, PlainSegment) or (isinstance(seg, ChordedSegment) and not chords):
+            elif isinstance(seg, UnchordedSegment) or (isinstance(seg, ChordedSegment) and not chords):
                 if chords and isinstance(prev_seg, ChordedSegment):
                     dumped.append("\n\\chordsoff\n")
                 dumped.append(self.dump_text(seg.text))
@@ -810,13 +854,15 @@ class ModifiedSongsLatexFormat(SongFormat):
             prev_seg = seg
         return "".join(dumped).replace("\n\n", "\n")
 
-    def _dump_chorded_text(self, text: str, chord_length: int) -> str:
+    def _dump_chorded_text(self, text: str, chord_length: int, endline: bool = False) -> str:
         dumped_text = self.dump_text(text)
-        if len(text.split()[0]) >= chord_length * self.no_chord_brace_length_multiple:
+        no_brace_length = max(chord_length * self.no_chord_brace_length_multiple, self.no_chord_brace_length)
+        if len(text.split()[0]) >= no_brace_length:
             return dumped_text
         noendspaced_text = dumped_text.rstrip()
-        tail = "" if noendspaced_text == dumped_text else dumped_text[-(len(dumped_text)-len(noendspaced_text)):]
-        return "{" + noendspaced_text + "}" + tail
+        tail = "" if noendspaced_text == dumped_text else dumped_text[-(len(dumped_text) - len(noendspaced_text)) :]
+        extender = "\\qquad" if endline and len(text) < no_brace_length else ""
+        return "{" + noendspaced_text + extender + "}" + tail
 
     def dump_chord(self, chord: Chord) -> str:
         modif_groups = []
@@ -833,11 +879,20 @@ class ModifiedSongsLatexFormat(SongFormat):
 
     def dump_text(self, some_text: str) -> str:
         if '"' in some_text:
-            warnings.warn(f"double quotes not typographically converted in {some_text}", category=SongSerializationWarning)
-            # TODO handle double quotes using \uv
+            some_text = self.dump_quoted_text(some_text)
         for pat, sub in self.text_dump_repls.items():
             some_text = some_text.replace(pat, sub)
         return some_text
+
+    def dump_quoted_text(self, some_text: str) -> str:
+        parts = some_text.split('"')
+        quoted_text = ""
+        for i, part in enumerate(parts):
+            if i % 2 == 0:
+                quoted_text += part
+            else:
+                quoted_text += f"\\uv{{{part}}}"
+        return quoted_text
 
 
 class ModelDictFormat(SongFormat):
@@ -869,7 +924,7 @@ if __name__ == "__main__":
     chords_path = Path(__file__).parent.parent / "test" / "data"
     format = ModifiedSongsLatexFormat()
     for path in chords_path.iterdir():
-        if path.suffix == ".tex" and "1970" in str(path):
+        if path.suffix == ".tex" and "1plus1" in str(path):
             text = path.open(encoding="utf8").read()
             print(text)
             song = format.loads(text).normalized()
@@ -896,5 +951,5 @@ if __name__ == "__main__":
 
 # TODO repetitions
 # TODO annotation parsing
-# TODO commandline interface
 # TODO remaining songs-latex-modif features (verse repetition, music notes, tablatures)
+# TODO omitting repetitions on output (1970)

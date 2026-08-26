@@ -1,10 +1,11 @@
 import argparse
 import logging
-import sys
 from pathlib import Path
+import sys
 
-import pysongbook.io
+import pysongbook.format
 import pysongbook.model
+
 
 FORMATS = {}
 for name in dir(pysongbook.io):
@@ -17,7 +18,9 @@ def get_inputs(input_path: Path | None, encoding: str) -> list[tuple[str, str]]:
     if input_path is None:
         inputs = [("stdin", sys.stdin.read())]
     elif input_path.is_dir():
-        inputs = [(str(fpath), fpath.open(encoding=encoding).read()) for fpath in input_path.iterdir() if fpath.is_file()]
+        inputs = [
+            (str(fpath), fpath.open(encoding=encoding).read()) for fpath in input_path.iterdir() if fpath.is_file()
+        ]
     else:
         inputs = [(str(input_path), input_path.open(encoding=encoding).read())]
     return inputs
@@ -35,7 +38,9 @@ def parse_inputs(inputs: list[tuple[str, str]], parser_format: pysongbook.io.Son
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("input", type=Path, default=None, help="songbook file or folder to process, default uses stdin")
-parser.add_argument("output", type=Path, default=None, help="songbook file or folder to output into, default uses stdout")
+parser.add_argument(
+    "output", type=Path, default=None, help="songbook file or folder to output into, default uses stdout"
+)
 parser.add_argument("-f", "--in-format", default="default", help="songbook format to expect on input")
 parser.add_argument("-F", "--out-format", default="default", help="songbook format to produce on output")
 parser.add_argument("-p", "--in-param", action="append", nargs=2, help="parameters to the input format parser")
@@ -60,4 +65,4 @@ if __name__ == "__main__":
         normalized = parsed
     # TODO proper output, including merging
     for song in normalized:
-        print(pysongbook.io.ModelDictFormat().dumps(song))
+        print(pysongbook.io.ModelDictFormat().dumps(song))  # noqa: T201  # print intended

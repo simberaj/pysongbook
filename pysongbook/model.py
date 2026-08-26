@@ -1,9 +1,9 @@
 import abc
+from abc import ABC
 import collections
 import copy
-from abc import ABC
 import dataclasses
-from typing import ClassVar, Literal, Type, TypeVar
+from typing import ClassVar, Literal, Self, TypeVar, cast
 
 
 # TODO CZ/EN note convention
@@ -34,21 +34,35 @@ class StropheSegment(ABC):
 
 
 @dataclasses.dataclass
-class PlainSegment(StropheSegment):
+class ChordlessSegment(StropheSegment):
+    """A segment without annotating chords: either there are none, or they need to be inferred from context."""
+
     text: str = ""  # needs default value to override abstract property
 
-    def __add__(self, other: str) -> "PlainSegment":
-        return PlainSegment(text=self.text + other)
+    def __add__(self, other: str) -> Self:
+        return self.__class__(text=self.text + other)
 
-    def __sub__(self, other: str) -> "PlainSegment":
-        return PlainSegment(text=self.text.removesuffix(other))
+    def __sub__(self, other: str) -> Self:
+        return self.__class__(text=self.text.removesuffix(other))
 
-    def splitlines(self) -> list["PlainSegment"]:
+    def splitlines(self) -> list[Self]:
         text_chunks = self.text.split("\n")
-        segments = [PlainSegment(chunk + "\n") for chunk in text_chunks[:-1]]
+        segments = [self.__class__(text=chunk + "\n") for chunk in text_chunks[:-1]]
         if text_chunks[-1]:
-            segments.append(PlainSegment(text_chunks[-1]))
+            segments.append(self.__class__(text=text_chunks[-1]))
         return segments
+
+
+class UnchordedSegment(ChordlessSegment):
+    """A segment which does not and is not meant to have a chord."""
+
+
+class IndeterminateChordingSegment(ChordlessSegment):
+    """A segment which might or might not have a chord."""
+
+
+class UnknownChordSegment(ChordlessSegment):
+    """A segment whose chord is not known yet should have one, and should be inferred from the context."""
 
 
 class ChordModifier(ABC):
@@ -153,7 +167,7 @@ class ChordedSegment(StropheSegment):
         return ChordedSegment(chord=self.chord, text=self.text.removesuffix(other))
 
     def splitlines(self) -> list["ChordedSegment"]:
-        plain_split = PlainSegment(self.text).splitlines()
+        plain_split = UnchordedSegment(self.text).splitlines()
         if not plain_split:
             return [self]
         return [type(self)(chord=self.chord, text=plseg.text) for plseg in plain_split]
@@ -291,18 +305,34 @@ class RepeatStropheWithSameMark(Strophe):
 
 @dataclasses.dataclass
 class StropheRepeat(Strophe):
-    repeated_strophe: Strophe
+    """A strophe that repeats a previous strophe."""
 
-    def __init__(self, repeated_strophe: Strophe):
-        self.repeated_strophe = repeated_strophe
+    repeated_strophe: Strophe
 
     @property
     def mark(self) -> StropheMark:
         return self.repeated_strophe.mark
 
+
+@dataclasses.dataclass
+class SimpleStropheRepeat(StropheRepeat):
+    """A strophe that repeats a previous strophe without any modification."""
+
+    def __init__(self, repeated_strophe: Strophe):
+        self.repeated_strophe = repeated_strophe
+
     @property
     def segments(self) -> list[StropheSegment]:
         return self.repeated_strophe.segments  # TODO this brings up some trouble
+
+
+@dataclasses.dataclass
+class ModifiedStropheRepeat(StropheRepeat):
+    """A strophe that repeats a previous strophe, but with modified segments."""
+
+    def __init__(self, repeated_strophe: Strophe, segments: list[StropheSegment]):
+        self.repeated_strophe = repeated_strophe
+        self.segments = segments
 
 
 class Annotation(ABC):
@@ -352,7 +382,7 @@ class Song:
     annotations: list[Annotation]
     items: list[Strophe | Annotation]  # TODO allow only some annotations between strophes?
 
-    def get_annotations_of_type(self, annot_type: Type[A]) -> list[A]:
+    def get_annotations_of_type(self, annot_type: type[A]) -> list[A]:
         return [annot for annot in self.annotations if isinstance(annot, annot_type)]
 
     def get_title(self) -> str | None:
@@ -378,16 +408,24 @@ class Song:
     def normalized(self) -> "Song":
         return Song(
             annotations=copy.deepcopy(self.annotations),
-            items=self._fill_initial_plain_segments(self._recognize_codas(self._infer_chorus_repetition(self._link_strophe_repeats(copy.deepcopy(self.items))))),
+            items=self._fill_initial_unknown_chord_segments(
+                self._recognize_codas(
+                    self._infer_chorus_repetition(self._link_strophe_repeats(copy.deepcopy(self.items)))
+                )
+            ),
         )
 
-    @staticmethod
-    def _link_strophe_repeats(items: list[Strophe | Annotation]) -> list[Strophe | Annotation]:
+    @classmethod
+    def _link_strophe_repeats(cls, items: list[Strophe | Annotation]) -> list[Strophe | Annotation]:
         linked_items = []
         for i, item in enumerate(items):
             if isinstance(item, RepeatStropheWithSameMark):
                 for j, link_item in reversed(list(enumerate(items[:i]))):
-                    if isinstance(link_item, Strophe) and link_item.mark == item.mark:
+                    if (
+                        isinstance(link_item, Strophe)
+                        and not isinstance(link_item, RepeatStropheWithSameMark)
+                        and link_item.mark == item.mark
+                    ):
                         break
                 else:
                     raise ValueError(f"cannot find strophe of mark {item.mark} to repeat")
@@ -396,15 +434,28 @@ class Song:
                     for i, seg in enumerate(link_item.segments):
                         if first_segment_text in seg.text:
                             break
-                    break_segment = dataclasses.replace(seg, text=seg.text[:seg.text.find(first_segment_text)])
-                    result_segments = link_item.segments[:i] + [break_segment] + item.segments
-                    result_item = Strophe(mark=item.mark, segments=result_segments)
+                    break_segment = dataclasses.replace(seg, text=seg.text[: seg.text.find(first_segment_text)])
+                    result_segments = (
+                        link_item.segments[:i] + [break_segment] + cls._ffill_chord(item.segments, break_segment)
+                    )
+                    result_item = ModifiedStropheRepeat(repeated_strophe=link_item, segments=result_segments)
                 else:
-                    result_item = StropheRepeat(repeated_strophe=link_item)
+                    result_item = SimpleStropheRepeat(repeated_strophe=link_item)
                 linked_items.append(result_item)
             else:
                 linked_items.append(item)
         return linked_items
+
+    @classmethod
+    def _ffill_chord(cls, segments: list[StropheSegment], source_segment: StropheSegment) -> list[StropheSegment]:
+        if not hasattr(source_segment, "chord"):
+            return segments
+        out_segments = []
+        for seg in segments:
+            if hasattr(seg, "chord"):
+                break
+            out_segments.append(ChordedSegment(chord=source_segment.chord, text=seg.text))
+        return out_segments + segments[len(out_segments) :]
 
     @staticmethod
     def _infer_chorus_repetition(items: list[Strophe | Annotation]) -> list[Strophe | Annotation]:
@@ -414,21 +465,21 @@ class Song:
         type_pattern = [NumberedStropheMark, ChorusMark] + [NumberedStropheMark] * (len(strophe_types) - 2)
         if strophe_types == type_pattern:
             # Inlay chorus repetition after the second and each subsequent strophe.
-            repeat_chorus = StropheRepeat(items[1])
+            repeat_chorus = SimpleStropheRepeat(cast(Strophe, items[1]))
             inlaid = items[:2] + [item for strophe in items[2:] for item in (strophe, repeat_chorus)]
             return inlaid
         return items
 
     @staticmethod
-    def _fill_initial_plain_segments(items: list[Strophe | Annotation]) -> list[Strophe | Annotation]:
+    def _fill_initial_unknown_chord_segments(items: list[Strophe | Annotation]) -> list[Strophe | Annotation]:
         replacements = []
         strophes: list[tuple[int, Strophe]] = [(i, item) for i, item in enumerate(items) if isinstance(item, Strophe)]
-        for prev, current in zip(strophes[:-1], strophes[1:]):
+        for prev, current in zip(strophes[:-1], strophes[1:], strict=False):
             prev_i, prev_strophe = prev
             cur_i, cur_strophe = current
             can_replace = (
                 cur_strophe.segments
-                and isinstance(cur_strophe.segments[0], PlainSegment)
+                and isinstance(cur_strophe.segments[0], UnknownChordSegment)
                 and any(isinstance(seg, ChordedSegment) for seg in cur_strophe.segments)
                 and prev_strophe.segments
                 and isinstance(prev_strophe.segments[-1], ChordedSegment)

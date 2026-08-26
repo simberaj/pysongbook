@@ -1,36 +1,48 @@
-import warnings
 from pathlib import Path
-
-from pysongbook.io import ModifiedSongsLatexChordParser, DefaultChordParser, ModifiedSongsLatexFormat
+import warnings
 
 import pytest
 
-chords_path = Path(__file__).parent / "data"
+from pysongbook.format import DefaultChordParser, ModifiedSongsLatexChordParser, ModifiedSongsLatexFormat
+
+
+inputs_path = Path(__file__).parent / "data"
+expected_outputs_path = Path(__file__).parent / "expected_out"
+
+
+def _read_texs_folder(path: Path) -> dict[str, str]:
+    return {p.stem: p.open(encoding="utf8").read() for p in path.iterdir() if p.suffix == ".tex"}
+
 
 @pytest.fixture(scope="session")
-def song_texts() -> list[str]:
-    texts = [
-        path.open(encoding="utf8").read()
-        for path in chords_path.iterdir()
-        if path.suffix == ".tex"
-    ]
-    return texts
+def input_texs() -> dict[str, str]:
+    return _read_texs_folder(inputs_path)
 
 
-def test_modif_songs_latex_parser(song_texts):
+@pytest.fixture(scope="session")
+def expected_output_texs() -> dict[str, str]:
+    return _read_texs_folder(expected_outputs_path)
+
+
+def test_modif_songs_latex_parser(input_texs: dict[str, str], expected_output_texs: dict[str, str]):
     format = ModifiedSongsLatexFormat()
-    for text in song_texts:
+    for name, text in input_texs.items():
         song = format.loads(text).normalized()
-        format.dumps(song, chords=True)
+        result = format.dumps(song, chords=True)
+        if name in expected_output_texs:
+            assert result.strip() == expected_output_texs[name].strip()
 
 
-@pytest.mark.parametrize("latex, normal", [
-    (r"Hm\hidx{7}/F\shrp{}", "Hm7/F#"),
-    (r"D\hidx{maj7}", "Dmaj7"),
-    (r"D\shrp{}m\hidx{7/5b}", "D#m7/5b"),
-    (r"A\hidx{sus2}", "Asus2"),
-    (r"Hm", "Hm"),
-    (r"C\didx{add9}", "Cadd9"),
-])
-def test_modif_songs_latex_chord_parser(latex, normal):
+@pytest.mark.parametrize(
+    "latex, normal",
+    [
+        (r"Hm\hidx{7}/F\shrp{}", "Hm7/F#"),
+        (r"D\hidx{maj7}", "Dmaj7"),
+        (r"D\shrp{}m\hidx{7/5b}", "D#m7/5b"),
+        (r"A\hidx{sus2}", "Asus2"),
+        (r"Hm", "Hm"),
+        (r"C\didx{add9}", "Cadd9"),
+    ],
+)
+def test_modif_songs_latex_chord_parser(latex: str, normal: str):
     assert ModifiedSongsLatexChordParser().parse(latex) == DefaultChordParser().parse(normal)
