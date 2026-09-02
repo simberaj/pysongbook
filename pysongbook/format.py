@@ -486,6 +486,7 @@ class ModifiedSongsLatexFormat(SongFormat):
         "...": "\\ldots{}",
         " - ": "~-- ",
     }
+    text_dump_patterns: dict[re.Pattern, str] = {re.compile(r"\((?P<inner>[^\\)]+)\)"): r"\\emph{(\1)}"}
     repcommands = {
         ChorusMark(): "repchorus",
         NumberedChorusMark(number=1): "repchorusi",
@@ -818,6 +819,7 @@ class ModifiedSongsLatexFormat(SongFormat):
     ] = {
         "cseq": (lambda segs: segs),
         "uv": (lambda segs: [IndeterminateChordingSegment('"')] + segs + [IndeterminateChordingSegment('"')]),
+        "emph": (lambda segs: segs),
         "rep": (lambda segs: [RepeatCount(int(segs[0].text))]),
         "repchorus": functools.partial(_parse_repsec_marked, mark=ChorusMark()),
         "repchorusi": functools.partial(_parse_repsec_marked, mark=NumberedChorusMark(number=1)),
@@ -964,7 +966,9 @@ class ModifiedSongsLatexFormat(SongFormat):
             yield f"\\rep{{{seg.n_repeats}}}"
         elif isinstance(seg, Repetition):
             inner = self.dump_segments(seg.segments, chords=chords)
-            yield f"\\reppart{{{inner}}} \\rep{{{seg.n_repeats}}}"
+            yield f"\\reppart{{{inner}}}"
+            if seg.n_repeats > 2:
+                yield f" \\rep{{{seg.n_repeats}}}"
         else:
             raise ValueError(f"unknown segment type: {seg}")
 
@@ -1006,6 +1010,8 @@ class ModifiedSongsLatexFormat(SongFormat):
             some_text = self.dump_quoted_text(some_text)
         for pat, sub in self.text_dump_repls.items():
             some_text = some_text.replace(pat, sub)
+        for pat, sub in self.text_dump_patterns.items():
+            some_text = pat.sub(sub, some_text)
         return some_text
 
     def dump_quoted_text(self, some_text: str) -> str:
@@ -1048,7 +1054,7 @@ if __name__ == "__main__":
     chords_path = Path(__file__).parent.parent / "test" / "data"
     format = ModifiedSongsLatexFormat()
     for path in chords_path.iterdir():
-        if path.suffix == ".tex" and "sekne" in str(path):
+        if path.suffix == ".tex" and "amelie" in str(path):
             text = path.open(encoding="utf8").read()
             print(text)
             song = format.loads(text).normalized()
