@@ -27,6 +27,8 @@ def expected_output_texs() -> dict[str, str]:
 def test_modif_songs_latex_parser(input_texs: dict[str, str], expected_output_texs: dict[str, str]):
     format = ModifiedSongsLatexFormat()
     for name, text in input_texs.items():
+        # if "sekne" not in name:
+        #     continue
         song = format.loads(text).normalized()
         result = format.dumps(song, chords=True)
         if name in expected_output_texs:

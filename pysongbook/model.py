@@ -160,17 +160,67 @@ class ChordedSegment(StropheSegment):
     chord: Chord
     text: str = ""  # needs default value to override abstract property
 
-    def __add__(self, other: str) -> "ChordedSegment":
-        return ChordedSegment(chord=self.chord, text=self.text + other)
+    def __add__(self, other: str) -> Self:
+        return self.__class__(chord=self.chord, text=self.text + other)
 
-    def __sub__(self, other: str) -> "ChordedSegment":
-        return ChordedSegment(chord=self.chord, text=self.text.removesuffix(other))
+    def __sub__(self, other: str) -> Self:
+        return self.__class__(chord=self.chord, text=self.text.removesuffix(other))
 
-    def splitlines(self) -> list["ChordedSegment"]:
+    def splitlines(self) -> list[Self]:
         plain_split = UnchordedSegment(self.text).splitlines()
         if not plain_split:
             return [self]
-        return [type(self)(chord=self.chord, text=plseg.text) for plseg in plain_split]
+        return [self.__class__(chord=self.chord, text=plseg.text) for plseg in plain_split]
+
+
+class BaseStropheSegmentCollection(StropheSegment, ABC):
+    """A base class for nested strophe segments (segments that contain other segments)."""
+
+
+@dataclasses.dataclass
+class Repetition(BaseStropheSegmentCollection):
+    """A section of a strophe that is meant to be repeated multiple times."""
+
+    segments: list[StropheSegment]
+    n_repeats: int = 2
+
+    def __add__(self, other: str) -> Self:
+        return self.__class__(segments=self.segments[:-1] + [self.segments[-1] + other], n_repeats=self.n_repeats)
+
+    def __sub__(self, other: str) -> Self:
+        return self.__class__(segments=self.segments[:-1] + [self.segments[-1] - other], n_repeats=self.n_repeats)
+
+    @property
+    def text(self) -> str:
+        # return "".join(seg.text for seg in self.segments)
+        raise ValueError("cannot get text of repetition")
+
+    def splitlines(self) -> list[Self]:
+        return [
+            self.__class__(
+                segments=[subseg for seg in self.segments for subseg in seg.splitlines()], n_repeats=self.n_repeats
+            )
+        ]
+
+
+@dataclasses.dataclass
+class RepeatedStrophePart(BaseStropheSegmentCollection):
+    """A part of a strophe repeat that is identical to the repeated strophe (unmodified)."""
+
+    segments: list[StropheSegment]
+
+    def __add__(self, other: str) -> Self:
+        return self.__class__(segments=self.segments[:-1] + [self.segments[-1] + other])
+
+    def __sub__(self, other: str) -> Self:
+        return self.__class__(segments=self.segments[:-1] + [self.segments[-1] - other])
+
+    @property
+    def text(self) -> str:
+        return "".join(seg.text for seg in self.segments)
+
+    def splitlines(self) -> list[Self]:
+        return [self.__class__(segments=[subseg for seg in self.segments for subseg in seg.splitlines()])]
 
 
 class StropheMark(ABC):
@@ -365,6 +415,24 @@ class TitleAnnotation(Annotation):
 
 
 @dataclasses.dataclass
+class CapoAnnotation(Annotation):
+    fret: int
+    is_chord_annotation: ClassVar[bool] = True
+
+    def to_string(self, delimiter: str) -> str:
+        return "Capo" + delimiter + str(self.fret)
+
+
+@dataclasses.dataclass
+class PickAnnotation(Annotation):
+    pattern: str
+    is_chord_annotation: ClassVar[bool] = True
+
+    def to_string(self, delimiter: str) -> str:
+        return "Pick" + delimiter + self.pattern
+
+
+@dataclasses.dataclass
 class GenericAnnotation(Annotation):  # TODO this should be replaced by more specialized subclasses & left as fallback
     key: str
     value: str
@@ -435,9 +503,9 @@ class Song:
                         if first_segment_text in seg.text:
                             break
                     break_segment = dataclasses.replace(seg, text=seg.text[: seg.text.find(first_segment_text)])
-                    result_segments = (
-                        link_item.segments[:i] + [break_segment] + cls._ffill_chord(item.segments, break_segment)
-                    )
+                    result_segments = [
+                        RepeatedStrophePart(link_item.segments[:i] + [break_segment])
+                    ] + cls._ffill_chord(item.segments, break_segment)
                     result_item = ModifiedStropheRepeat(repeated_strophe=link_item, segments=result_segments)
                 else:
                     result_item = SimpleStropheRepeat(repeated_strophe=link_item)
