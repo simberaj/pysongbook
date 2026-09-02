@@ -6,7 +6,8 @@ import pytest
 from pysongbook.format import DefaultChordParser, ModifiedSongsLatexChordParser, ModifiedSongsLatexFormat
 
 
-inputs_path = Path(__file__).parent / "data"
+# inputs_path = Path(__file__).parent / "data"
+inputs_path = Path(__file__).parent.parent / "playground" / "all"
 expected_outputs_path = Path(__file__).parent / "expected_out"
 
 

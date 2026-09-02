@@ -46,7 +46,7 @@ from pysongbook.model import (
     Suspended,
     TitleAnnotation,
     UnchordedSegment,
-    UnknownChordSegment,
+    UnknownChordSegment, GenericAnnotation, NoteAnnotation,
 )
 
 
@@ -497,6 +497,7 @@ class ModifiedSongsLatexFormat(SongFormat):
     command_arg_settings: dict[str, CommandArgSetting] = {
         "capo": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
         "pick": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
+        "musicnote": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
         "repsec": CommandArgSetting(min_args=2, max_args=2, raw_args=[]),
     }
 
@@ -816,6 +817,7 @@ class ModifiedSongsLatexFormat(SongFormat):
 
     complex_text_commands: dict[
         str, Callable[[list[StropheSegment | ProcessingInstruction]], list[StropheSegment | ProcessingInstruction]]
+             | Callable[[str], list[Annotation]]
     ] = {
         "cseq": (lambda segs: segs),
         "uv": (lambda segs: [IndeterminateChordingSegment('"')] + segs + [IndeterminateChordingSegment('"')]),
@@ -826,6 +828,7 @@ class ModifiedSongsLatexFormat(SongFormat):
         "repchorusii": functools.partial(_parse_repsec_marked, mark=NumberedChorusMark(number=2)),
         "capo": (lambda arg: [CapoAnnotation(int(arg))]),
         "pick": (lambda arg: [PickAnnotation(arg)]),
+        "musicnote": (lambda arg: [NoteAnnotation(arg)]),
         "reppart": (lambda segs: [Repetition(segs)]),
         "repsec": (lambda markers, segs, rm=_parse_repsec_marked, rr=_parse_repsec_marker: rm(segs, rr(markers))),
     }
@@ -858,6 +861,8 @@ class ModifiedSongsLatexFormat(SongFormat):
             return f"\\capo{{{annot.fret}}}"
         elif isinstance(annot, PickAnnotation):
             return f"\\pick{{{annot.pattern}}}"
+        elif isinstance(annot, NoteAnnotation):
+            return f"\\musicnote{{{annot.text}}}"
         raise TypeError(f"unknown annotation type: {annot!r}")
 
     def dump_song_items(self, song: Song, chords: bool) -> Generator[str, None, None]:
@@ -966,6 +971,9 @@ class ModifiedSongsLatexFormat(SongFormat):
             yield f"\\rep{{{seg.n_repeats}}}"
         elif isinstance(seg, Repetition):
             inner = self.dump_segments(seg.segments, chords=chords)
+            if inner.startswith("\\chordson"):
+                inner = inner.removeprefix("\\chordson").lstrip()
+                yield "\\chordson"
             yield f"\\reppart{{{inner}}}"
             if seg.n_repeats > 2:
                 yield f" \\rep{{{seg.n_repeats}}}"
@@ -1054,7 +1062,7 @@ if __name__ == "__main__":
     chords_path = Path(__file__).parent.parent / "test" / "data"
     format = ModifiedSongsLatexFormat()
     for path in chords_path.iterdir():
-        if path.suffix == ".tex" and "amelie" in str(path):
+        if path.suffix == ".tex" and "berousek" in str(path):
             text = path.open(encoding="utf8").read()
             print(text)
             song = format.loads(text).normalized()

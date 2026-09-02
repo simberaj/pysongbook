@@ -433,6 +433,15 @@ class PickAnnotation(Annotation):
 
 
 @dataclasses.dataclass
+class NoteAnnotation(Annotation):
+    text: str
+    is_chord_annotation: ClassVar[bool] = False
+
+    def to_string(self, delimiter: str) -> str:
+        return "Note" + delimiter + self.text
+
+
+@dataclasses.dataclass
 class GenericAnnotation(Annotation):  # TODO this should be replaced by more specialized subclasses & left as fallback
     key: str
     value: str
