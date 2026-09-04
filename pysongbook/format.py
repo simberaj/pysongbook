@@ -46,7 +46,7 @@ from pysongbook.model import (
     Suspended,
     TitleAnnotation,
     UnchordedSegment,
-    UnknownChordSegment, GenericAnnotation, NoteAnnotation,
+    UnknownChordSegment, NoteAnnotation, FadeOutAnnotation, ShowChordTab, StringPositions,
 )
 
 
@@ -405,6 +405,11 @@ class EmbeddedStropheMark(ProcessingInstruction):
 
 
 @dataclasses.dataclass
+class EmbeddedAnnotation(ProcessingInstruction):
+    annotation: Annotation
+
+
+@dataclasses.dataclass
 class RepeatCount(ProcessingInstruction):
     n_repeats: int
 
@@ -499,7 +504,13 @@ class ModifiedSongsLatexFormat(SongFormat):
         "pick": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
         "musicnote": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
         "repsec": CommandArgSetting(min_args=2, max_args=2, raw_args=[]),
+        "fadeout": CommandArgSetting(min_args=0, max_args=0, raw_args=[]),
+        "showchordtab": CommandArgSetting(min_args=5, max_args=5, raw_args=[0, 1, 2, 3, 4]),
     }
+
+    def __init__(self):
+        super().__init__()
+        self.complex_text_commands["showchordtab"] = self._parse_showchordtab
 
     def loads(self, song_text: str) -> Song:
         annotations, remnant = self._parse_beginsong(song_text)
@@ -586,15 +597,29 @@ class ModifiedSongsLatexFormat(SongFormat):
         else:
             return pos
 
-    def _parse_strophe(self, strophe_str: str, num: int, chords_on: bool) -> tuple[Strophe, list[Annotation]]:
+    def _parse_strophe(self, strophe_str: str, num: int, chords_on: bool) -> tuple[Strophe, list[EmbeddedStrophe | Annotation]]:
         mark_str = re.match(r"\w+", strophe_str).group()
         mark = self._parse_strophe_mark(mark_str, num=num)
         parts = self.endverse_pattern.split(strophe_str[len(mark_str) :])
         if len(parts) != 2:
             raise SongParseError("mismatched strophe start/end commands")
         body, afterpart = [part.strip() for part in parts]
-        strophe = Strophe(mark=mark, segments=self._parse_strophe_segments(body, chords_on=chords_on))
-        return strophe, self._parse_annotation_chunk(afterpart)
+        strophe_segments = self._parse_strophe_segments(body, chords_on=chords_on)
+        strophe_segments, inner_annotations = self._extract_strophe_annotations(strophe_segments)
+        strophe = Strophe(mark=mark, segments=strophe_segments)
+        return strophe, inner_annotations + self._parse_annotation_chunk(afterpart)
+
+    @staticmethod
+    def _extract_strophe_annotations(segments: list[StropheSegment | ProcessingInstruction]) -> tuple[list[StropheSegment], list[Annotation]]:
+        segments = segments.copy()
+        annotations: list[Annotation] = []
+        i = 0
+        while i < len(segments):
+            if isinstance(segments[i], EmbeddedAnnotation):
+                annotations.append(segments.pop(i).annotation)
+            else:
+                i += 1
+        return segments, annotations
 
     def _parse_strophe_mark(self, mark_str: str, num: int) -> StropheMark:
         if mark_str == self.numbered_beginverse_command:
@@ -604,7 +629,7 @@ class ModifiedSongsLatexFormat(SongFormat):
         else:
             raise SongParseError(f"unknown strophe mark command: {mark_str!r}")
 
-    def _parse_strophe_segments(self, body: str, chords_on: bool) -> list[StropheSegment]:
+    def _parse_strophe_segments(self, body: str, chords_on: bool) -> list[StropheSegment | ProcessingInstruction]:
         # STROPHE = STROPHE_PART+
         # STROPHE_PART = COMMAND_CHUNK | STROPHE_CHUNK
         # COMMAND_CHUNK = "\" COMMAND_NAME CURLY_PARS?
@@ -622,7 +647,7 @@ class ModifiedSongsLatexFormat(SongFormat):
         return self._join_strophe_segments(strophe_segments, chords_on=chords_on)
 
     @classmethod
-    def _join_strophe_segments(cls, segments: list[StropheSegment], chords_on: bool) -> list[StropheSegment]:
+    def _join_strophe_segments(cls, segments: list[StropheSegment | ProcessingInstruction], chords_on: bool) -> list[StropheSegment | ProcessingInstruction]:
         seg_i = 0
         current_chords_on = chords_on
         while seg_i < len(segments):
@@ -705,6 +730,10 @@ class ModifiedSongsLatexFormat(SongFormat):
         elif command_name in self.noop_commands:
             return (args[0] if args else []), after_pos
         else:
+            if command_name not in self.complex_text_commands:
+                raise RuntimeError(f"unknown command: {command_name}")
+            if command_name == "showchordtab":
+                print("howdy")
             return self.complex_text_commands[command_name](*args), after_pos
 
     def _parse_command_args(
@@ -781,6 +810,9 @@ class ModifiedSongsLatexFormat(SongFormat):
             raise PositionalSongParseError("expecting {", text, pos)
         current_pos = pos + 1
         end_pos = text.find("}", current_pos)
+        while text.count("{", current_pos, end_pos) > text.count("}", current_pos, end_pos):
+            # Ignore any nested curly braces.
+            end_pos = text.find("}", end_pos+1)
         return text[current_pos:end_pos], end_pos + 1
 
     def _parse_chord_mark(self, text: str, pos: int) -> tuple[Chord, int]:
@@ -815,9 +847,44 @@ class ModifiedSongsLatexFormat(SongFormat):
         emb_strophe = EmbeddedStrophe(RepeatStropheWithSameMark(mark=mark, segments=segs))
         return [emb_strophe] * n_repeats
 
+    def _parse_showchordtab(self, chord_mark: str, layout: str, width: str, hpos: str, vpos: str) -> list[ShowChordTab]:
+        fret, positions, fingers = self._parse_showchordtab_layout(layout)
+        return [ShowChordTab(chord=self.chord_parser.parse(chord_mark), fret=fret, positions=positions, fingers=fingers, width=float(width), hpos=float(hpos), vpos=float(vpos))]
+
+    def _parse_showchordtab_layout(self, layout: str) -> tuple[int, StringPositions, StringPositions | None]:
+        parts = layout.split(":")
+        if len(parts) == 1:
+            fret = 0
+            positions = self._parse_string_positions(parts[0])
+            fingers = None
+        elif len(parts) == 2:
+            if len(parts[0]) < 6:
+                fret = int(parts[0])
+                positions = self._parse_string_positions(parts[1])
+                fingers = None
+            else:
+                fret = 0
+                positions = self._parse_string_positions(parts[0])
+                fingers = self._parse_string_positions(parts[1])
+        elif len(parts) == 3:
+            fret = int(parts[0])
+            positions = self._parse_string_positions(parts[1])
+            fingers = self._parse_string_positions(parts[2])
+        else:
+            raise ValueError(f"invalid showchordtab layout: {layout!r}")
+        return fret, positions, fingers
+
+    @staticmethod
+    def _parse_string_positions(position_str: str) -> StringPositions:
+        if len(position_str) != 6:
+            raise ValueError(f"invalid guitar string positions: {position_str!r}, must have length exactly 6")
+        chars = list(position_str)
+        positions = tuple(int(char) if char.lower() != "x" else None for char in chars)
+        return positions
+
     complex_text_commands: dict[
         str, Callable[[list[StropheSegment | ProcessingInstruction]], list[StropheSegment | ProcessingInstruction]]
-             | Callable[[str], list[Annotation]]
+             | Callable[[str, ...], list[Annotation]]
     ] = {
         "cseq": (lambda segs: segs),
         "uv": (lambda segs: [IndeterminateChordingSegment('"')] + segs + [IndeterminateChordingSegment('"')]),
@@ -831,6 +898,7 @@ class ModifiedSongsLatexFormat(SongFormat):
         "musicnote": (lambda arg: [NoteAnnotation(arg)]),
         "reppart": (lambda segs: [Repetition(segs)]),
         "repsec": (lambda markers, segs, rm=_parse_repsec_marked, rr=_parse_repsec_marker: rm(segs, rr(markers))),
+        "fadeout": (lambda: [EmbeddedAnnotation(FadeOutAnnotation())]),
     }
 
     def dumps(self, song: Song, chords: bool = True) -> str:
@@ -863,6 +931,11 @@ class ModifiedSongsLatexFormat(SongFormat):
             return f"\\pick{{{annot.pattern}}}"
         elif isinstance(annot, NoteAnnotation):
             return f"\\musicnote{{{annot.text}}}"
+        elif isinstance(annot, FadeOutAnnotation):
+            return "\\freev\\fadeout\\emptyspace\\\\cl\n"
+        elif isinstance(annot, ShowChordTab):
+            # \showchordtab{C/G}{332010:342010}{1.5}{10}{4}
+            return f"\\showchordtab{{{self.dump_chord(annot.chord)}}}{{{annot.layout_str}}}{{{annot.width}}}{{{annot.hpos}}}{{{annot.vpos}}}"
         raise TypeError(f"unknown annotation type: {annot!r}")
 
     def dump_song_items(self, song: Song, chords: bool) -> Generator[str, None, None]:

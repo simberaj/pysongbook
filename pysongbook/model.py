@@ -3,8 +3,8 @@ from abc import ABC
 import collections
 import copy
 import dataclasses
-from typing import ClassVar, Literal, Self, TypeVar, cast
-
+from functools import cached_property
+from typing import ClassVar, Literal, Self, TypeVar, cast, TypeAlias
 
 # TODO CZ/EN note convention
 Note = Literal["C", "C#", "Db", "D", "D#", "Eb", "E", "F", "F#", "Fb", "G", "G#", "Gb", "A", "A#", "Ab", "B", "H"]
@@ -442,6 +442,42 @@ class NoteAnnotation(Annotation):
 
 
 @dataclasses.dataclass
+class FadeOutAnnotation(Annotation):
+    is_chord_annotation: ClassVar[bool] = False
+
+    def to_string(self, delimiter: str) -> str:
+        return f"Ending{delimiter}to fade out"
+
+
+@dataclasses.dataclass
+class ShowChordTab(Annotation):
+    chord: Chord
+    fret: int
+    positions: StringPositions
+    fingers: StringPositions | None
+    width: float
+    hpos: float
+    vpos: float
+    is_chord_annotation: ClassVar[bool] = True
+
+    @cached_property
+    def layout_str(self) -> str:
+        layout_str = string_positions_to_string(self.positions)
+        if self.fret > 0:
+            layout_str = f"{self.fret}:{layout_str}"
+        if self.fingers is not None:
+            layout_str += ":" + string_positions_to_string(self.fingers)
+        return layout_str
+
+    def to_string(self, delimiter: str) -> str:
+        return self.chord.to_string() + delimiter + self.layout_str
+
+
+def string_positions_to_string(positions: StringPositions) -> str:
+    return "".join(str(pos) if pos is not None else "X" for pos in positions)
+
+
+@dataclasses.dataclass
 class GenericAnnotation(Annotation):  # TODO this should be replaced by more specialized subclasses & left as fallback
     key: str
     value: str
@@ -577,3 +613,6 @@ class Song:
             items[marks[-1][0]].mark = CodaMark()
             return items
         return items
+
+
+StringPositions: TypeAlias = tuple[int | None, int | None, int | None, int | None, int | None, int | None]
