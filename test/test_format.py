@@ -50,5 +50,6 @@ def test_modif_songs_latex_chord_parser(latex: str, normal: str):
 
 
 def test_modif_songs_latex_chord_parser_infloop():
-    ModifiedSongsLatexFormat()._parse_strophe("emptyv\n\\chordson\n\\[A]Óó\\[D]{ó\\ldots}\n\\cl", num=2, chords_on=False)
-
+    ModifiedSongsLatexFormat()._parse_strophe(
+        "emptyv\n\\chordson\n\\[A]Óó\\[D]{ó\\ldots}\n\\cl", num=2, chords_on=False
+    )

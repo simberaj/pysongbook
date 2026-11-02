@@ -1,11 +1,11 @@
 import abc
-import uuid
 from abc import ABC
 import collections
 import copy
 import dataclasses
 from functools import cached_property
-from typing import ClassVar, Literal, Self, TypeVar, cast, TypeAlias
+from typing import ClassVar, Literal, Self, TypeAlias, TypeVar, cast
+
 
 # TODO CZ/EN note convention
 Note = Literal["C", "C#", "Db", "D", "D#", "Eb", "E", "F", "F#", "Fb", "G", "G#", "Gb", "A", "A#", "Ab", "B", "H"]
@@ -535,9 +535,7 @@ class Song:
         return Song(
             annotations=copy.deepcopy(self.annotations),
             items=self._fill_initial_unknown_chord_segments(
-                self._recognize_codas(
-                    self._infer_chorus_repetition(linked)
-                )
+                self._recognize_codas(self._infer_chorus_repetition(linked))
             ),
         )
 

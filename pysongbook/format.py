@@ -23,29 +23,34 @@ from pysongbook.model import (
     CodaMark,
     DominantSeventh,
     EmptyStropheMark,
+    FadeOutAnnotation,
     GenericChordModifier,
     IndeterminateChordingSegment,
     IntroMark,
     LetteredStropheMark,
     MajorSeventh,
     Minor,
+    NoteAnnotation,
     NumberedChorusMark,
     NumberedStropheMark,
     PickAnnotation,
     RecitationMark,
     RepeatStropheWithSameMark,
     Repetition,
+    ShowChordTab,
     SimpleStropheRepeat,
     SoloMark,
     Song,
+    StringPositions,
     Strophe,
     StropheMark,
     StropheRepeat,
     StropheSegment,
     Suspended,
     TitleAnnotation,
+    TransposeAnnotation,
     UnchordedSegment,
-    UnknownChordSegment, NoteAnnotation, FadeOutAnnotation, ShowChordTab, StringPositions, TransposeAnnotation,
+    UnknownChordSegment,
 )
 
 
@@ -606,7 +611,9 @@ class ModifiedSongsLatexFormat(SongFormat):
                 break
         return current_pos
 
-    def _parse_strophe(self, strophe_str: str, num: int, chords_on: bool) -> tuple[Strophe, list[EmbeddedStrophe | Annotation]]:
+    def _parse_strophe(
+        self, strophe_str: str, num: int, chords_on: bool
+    ) -> tuple[Strophe, list[EmbeddedStrophe | Annotation]]:
         mark_str = re.match(r"\w+", strophe_str).group()
         mark = self._parse_strophe_mark(mark_str, num=num)
         parts = self.endverse_pattern.split(strophe_str[len(mark_str) :])
@@ -619,7 +626,9 @@ class ModifiedSongsLatexFormat(SongFormat):
         return strophe, inner_annotations + self._parse_annotation_chunk(afterpart)
 
     @staticmethod
-    def _extract_strophe_annotations(segments: list[StropheSegment | ProcessingInstruction]) -> tuple[list[StropheSegment], list[Annotation]]:
+    def _extract_strophe_annotations(
+        segments: list[StropheSegment | ProcessingInstruction],
+    ) -> tuple[list[StropheSegment], list[Annotation]]:
         segments = segments.copy()
         annotations: list[Annotation] = []
         i = 0
@@ -656,7 +665,9 @@ class ModifiedSongsLatexFormat(SongFormat):
         return self._join_strophe_segments(strophe_segments, chords_on=chords_on)
 
     @classmethod
-    def _join_strophe_segments(cls, segments: list[StropheSegment | ProcessingInstruction], chords_on: bool) -> list[StropheSegment | ProcessingInstruction]:
+    def _join_strophe_segments(
+        cls, segments: list[StropheSegment | ProcessingInstruction], chords_on: bool
+    ) -> list[StropheSegment | ProcessingInstruction]:
         seg_i = 0
         current_chords_on = chords_on
         while seg_i < len(segments):
@@ -669,7 +680,7 @@ class ModifiedSongsLatexFormat(SongFormat):
             elif isinstance(segments[seg_i], Repetition):
                 segments[seg_i] = Repetition(
                     segments=cls._join_strophe_segments(segments[seg_i].segments, current_chords_on),
-                    n_repeats=segments[seg_i].n_repeats
+                    n_repeats=segments[seg_i].n_repeats,
                 )
                 seg_i += 1
             elif isinstance(segments[seg_i], IndeterminateChordingSegment):
@@ -712,7 +723,7 @@ class ModifiedSongsLatexFormat(SongFormat):
         return segments
 
     def _parse_strophe_part(self, text: str, pos: int) -> tuple[list[StropheSegment | ProcessingInstruction], int]:
-        if text[pos] == "\\" and text[pos:pos+2] != "\\[":
+        if text[pos] == "\\" and text[pos : pos + 2] != "\\[":
             return self._parse_command_chunk(text, pos)
         return self._parse_strophe_chunk(text, pos)
 
@@ -822,7 +833,7 @@ class ModifiedSongsLatexFormat(SongFormat):
         end_pos = text.find("}", current_pos)
         while text.count("{", current_pos, end_pos) > text.count("}", current_pos, end_pos):
             # Ignore any nested curly braces.
-            end_pos = text.find("}", end_pos+1)
+            end_pos = text.find("}", end_pos + 1)
         return text[current_pos:end_pos], end_pos + 1
 
     def _parse_chord_mark(self, text: str, pos: int) -> tuple[Chord, int]:
@@ -848,7 +859,9 @@ class ModifiedSongsLatexFormat(SongFormat):
             raise ValueError(f"invalid repsec marker: {marker!r}")
 
     @staticmethod
-    def _parse_repsec_marked(segs: list[StropheSegment | ProcessingInstruction], mark: StropheMark) -> list[EmbeddedStrophe]:
+    def _parse_repsec_marked(
+        segs: list[StropheSegment | ProcessingInstruction], mark: StropheMark
+    ) -> list[EmbeddedStrophe]:
         if segs and isinstance(segs[-1], RepeatCount):
             n_repeats = segs[-1].n_repeats
             segs.pop()
@@ -859,7 +872,17 @@ class ModifiedSongsLatexFormat(SongFormat):
 
     def _parse_showchordtab(self, chord_mark: str, layout: str, width: str, hpos: str, vpos: str) -> list[ShowChordTab]:
         fret, positions, fingers = self._parse_showchordtab_layout(layout)
-        return [ShowChordTab(chord=self.chord_parser.parse(chord_mark), fret=fret, positions=positions, fingers=fingers, width=float(width), hpos=float(hpos), vpos=float(vpos))]
+        return [
+            ShowChordTab(
+                chord=self.chord_parser.parse(chord_mark),
+                fret=fret,
+                positions=positions,
+                fingers=fingers,
+                width=float(width),
+                hpos=float(hpos),
+                vpos=float(vpos),
+            )
+        ]
 
     def _parse_showchordtab_layout(self, layout: str) -> tuple[int, StringPositions, StringPositions | None]:
         parts = layout.split(":")
@@ -893,8 +916,9 @@ class ModifiedSongsLatexFormat(SongFormat):
         return positions
 
     complex_text_commands: dict[
-        str, Callable[[list[StropheSegment | ProcessingInstruction]], list[StropheSegment | ProcessingInstruction]]
-             | Callable[[str, ...], list[Annotation]]
+        str,
+        Callable[[list[StropheSegment | ProcessingInstruction]], list[StropheSegment | ProcessingInstruction]]
+        | Callable[[str, ...], list[Annotation]],
     ] = {
         "cseq": (lambda segs: segs),
         "uv": (lambda segs: [IndeterminateChordingSegment('"')] + segs + [IndeterminateChordingSegment('"')]),
