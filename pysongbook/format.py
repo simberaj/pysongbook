@@ -33,7 +33,6 @@ from pysongbook.model import (
     NumberedStropheMark,
     PickAnnotation,
     RecitationMark,
-    RepeatedStrophePart,
     RepeatStropheWithSameMark,
     Repetition,
     SimpleStropheRepeat,
@@ -46,7 +45,7 @@ from pysongbook.model import (
     Suspended,
     TitleAnnotation,
     UnchordedSegment,
-    UnknownChordSegment, NoteAnnotation, FadeOutAnnotation, ShowChordTab, StringPositions,
+    UnknownChordSegment, NoteAnnotation, FadeOutAnnotation, ShowChordTab, StringPositions, TransposeAnnotation,
 )
 
 
@@ -501,6 +500,7 @@ class ModifiedSongsLatexFormat(SongFormat):
     no_chord_brace_length = 3
     command_arg_settings: dict[str, CommandArgSetting] = {
         "capo": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
+        "transpose": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
         "pick": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
         "musicnote": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
         "repsec": CommandArgSetting(min_args=2, max_args=2, raw_args=[]),
@@ -515,7 +515,7 @@ class ModifiedSongsLatexFormat(SongFormat):
     def loads(self, song_text: str) -> Song:
         annotations, remnant = self._parse_beginsong(song_text)
         strophe_strs = self.strophe_split_pattern.split(remnant)
-        if len(strophe_strs) < 3:
+        if len(strophe_strs) < 2:
             raise SongParseError("no strophes found")
         annotations.extend(self._parse_annotations(strophe_strs[0].strip()))
         items: list[Annotation | Strophe] = []
@@ -573,7 +573,9 @@ class ModifiedSongsLatexFormat(SongFormat):
         strophes_and_annots = []
         current_pos = 0
         while current_pos < len(annot_str):
-            current_pos = self._skip_whitespace(annot_str, pos=current_pos)
+            current_pos = self._skip_whitespace_and_comments(annot_str, pos=current_pos)
+            if current_pos >= len(annot_str):
+                break
             part_results, current_pos = self._parse_command_chunk(annot_str, pos=current_pos)
             for result in part_results:
                 if isinstance(result, EmbeddedStrophe | Annotation):
@@ -590,12 +592,19 @@ class ModifiedSongsLatexFormat(SongFormat):
                     raise ValueError(f"invalid annotation chunk content: {result!r} from {annot_str!r}")
         return strophes_and_annots
 
-    def _skip_whitespace(self, text: str, pos: int) -> int:
-        whitespace_match = self.whitespace_pattern.match(text[pos:])
-        if whitespace_match:
-            return pos + len(whitespace_match.group())
-        else:
-            return pos
+    def _skip_whitespace_and_comments(self, text: str, pos: int) -> int:
+        current_pos = pos
+        while True:
+            whitespace_match = self.whitespace_pattern.match(text[current_pos:])
+            if whitespace_match:
+                current_pos += len(whitespace_match.group())
+            elif text[current_pos] == "%":
+                current_pos = text.find("\n", current_pos) + 1
+                if current_pos == 0:  # newline not found, assume end of string
+                    return len(text)
+            else:
+                break
+        return current_pos
 
     def _parse_strophe(self, strophe_str: str, num: int, chords_on: bool) -> tuple[Strophe, list[EmbeddedStrophe | Annotation]]:
         mark_str = re.match(r"\w+", strophe_str).group()
@@ -685,16 +694,19 @@ class ModifiedSongsLatexFormat(SongFormat):
                     segments[seg_i] = ctype(text=segments[seg_i].text)
                     seg_i += 1
             elif isinstance(segments[seg_i], RepeatCount) and seg_i > 0:
+                move = 1
                 for j in range(1, seg_i + 1):
                     if isinstance(segments[seg_i - j], Repetition):
                         segments[seg_i - j].n_repeats = segments[seg_i].n_repeats
                         for k in range(j):
                             # Remove all intervening empty space segments.
                             segments.pop(seg_i - k)
+                            move -= 1
                         break
                     elif not isinstance(segments[seg_i - j], ChordlessSegment) or segments[seg_i - j].text.strip():
                         # Skip through empty space segments when finding a corresponding repetition segment.
                         break
+                seg_i += move
             else:
                 seg_i += 1
         return segments
@@ -732,8 +744,6 @@ class ModifiedSongsLatexFormat(SongFormat):
         else:
             if command_name not in self.complex_text_commands:
                 raise RuntimeError(f"unknown command: {command_name}")
-            if command_name == "showchordtab":
-                print("howdy")
             return self.complex_text_commands[command_name](*args), after_pos
 
     def _parse_command_args(
@@ -786,9 +796,9 @@ class ModifiedSongsLatexFormat(SongFormat):
         if after_chord_pos < len(text) and text[after_chord_pos].startswith("{"):
             inner_chunk, after_brace_pos = self._parse_curly_parens(text, after_chord_pos)
             # this inner chunk should be a simple plain segment
-            if len(inner_chunk) != 1 or not isinstance(inner_chunk[0], ChordlessSegment):
+            if not all(isinstance(part, ChordlessSegment) for part in inner_chunk):
                 raise PositionalSongParseError("non-plain chord scope parentheses content", text, after_chord_pos)
-            inner_text = inner_chunk[0].text
+            inner_text = "".join(part.text for part in inner_chunk)
         else:
             inner_text = ""
             after_brace_pos = after_chord_pos
@@ -894,6 +904,7 @@ class ModifiedSongsLatexFormat(SongFormat):
         "repchorusi": functools.partial(_parse_repsec_marked, mark=NumberedChorusMark(number=1)),
         "repchorusii": functools.partial(_parse_repsec_marked, mark=NumberedChorusMark(number=2)),
         "capo": (lambda arg: [CapoAnnotation(int(arg))]),
+        "transpose": (lambda arg: [TransposeAnnotation(int(arg))]),
         "pick": (lambda arg: [PickAnnotation(arg)]),
         "musicnote": (lambda arg: [NoteAnnotation(arg)]),
         "reppart": (lambda segs: [Repetition(segs)]),
@@ -927,6 +938,8 @@ class ModifiedSongsLatexFormat(SongFormat):
     def dump_annotation(self, annot: Annotation) -> str:
         if isinstance(annot, CapoAnnotation):
             return f"\\capo{{{annot.fret}}}"
+        elif isinstance(annot, TransposeAnnotation):
+            return f"\\transpose{{{annot.fret}}}"
         elif isinstance(annot, PickAnnotation):
             return f"\\pick{{{annot.pattern}}}"
         elif isinstance(annot, NoteAnnotation):
@@ -936,6 +949,8 @@ class ModifiedSongsLatexFormat(SongFormat):
         elif isinstance(annot, ShowChordTab):
             # \showchordtab{C/G}{332010:342010}{1.5}{10}{4}
             return f"\\showchordtab{{{self.dump_chord(annot.chord)}}}{{{annot.layout_str}}}{{{annot.width}}}{{{annot.hpos}}}{{{annot.vpos}}}"
+        elif isinstance(annot, TurnChordsOff):
+            return ""  # done automatically, always
         raise TypeError(f"unknown annotation type: {annot!r}")
 
     def dump_song_items(self, song: Song, chords: bool) -> Generator[str, None, None]:
@@ -945,7 +960,6 @@ class ModifiedSongsLatexFormat(SongFormat):
                 yield self.dump_annotation(item)
             elif isinstance(item, SimpleStropheRepeat):
                 accummulated_repeats.append(item)
-                # TODO handle modified strophe repeats
                 if (
                     i + 1 == len(song.items)
                     or not isinstance(song.items[i + 1], SimpleStropheRepeat)
@@ -979,9 +993,7 @@ class ModifiedSongsLatexFormat(SongFormat):
         return self.dump_any_strophe_repeat(strophe.mark, inner)
 
     def dump_strophe_repeat(self, strophe: StropheRepeat, chords: bool) -> str:
-        inner = self.dump_segments(
-            [seg for seg in strophe.segments if not isinstance(seg, RepeatedStrophePart)], chords=chords
-        )
+        inner = self.dump_segments(strophe.segments, chords=chords)
         return self.dump_any_strophe_repeat(strophe.mark, inner)
 
     def dump_any_strophe_repeat(self, mark: StropheMark, inner: str):
@@ -1005,7 +1017,7 @@ class ModifiedSongsLatexFormat(SongFormat):
 
     def dump_segments(self, segments: list[StropheSegment], chords: bool) -> str:
         dumped = []
-        if chords and segments and isinstance(segments[0], ChordedSegment):
+        if chords and segments and isinstance(segments[0], (ChordedSegment, UnknownChordSegment)):
             if all(isinstance(seg, ChordedSegment) and (not seg.text or seg.text.isspace()) for seg in segments):
                 return self.dump_cseq(segments)
             dumped.append("\\chordson\n")
@@ -1050,6 +1062,8 @@ class ModifiedSongsLatexFormat(SongFormat):
             yield f"\\reppart{{{inner}}}"
             if seg.n_repeats > 2:
                 yield f" \\rep{{{seg.n_repeats}}}"
+        elif isinstance(seg, EmbeddedAnnotation) and isinstance(seg.annotation, FadeOutAnnotation):
+            yield "\\fadeout"
         else:
             raise ValueError(f"unknown segment type: {seg}")
 

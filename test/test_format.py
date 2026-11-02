@@ -28,8 +28,6 @@ def expected_output_texs() -> dict[str, str]:
 def test_modif_songs_latex_parser(input_texs: dict[str, str], expected_output_texs: dict[str, str]):
     format = ModifiedSongsLatexFormat()
     for name, text in input_texs.items():
-        # if "sekne" not in name:
-        #     continue
         song = format.loads(text).normalized()
         result = format.dumps(song, chords=True)
         if name in expected_output_texs:
@@ -49,3 +47,8 @@ def test_modif_songs_latex_parser(input_texs: dict[str, str], expected_output_te
 )
 def test_modif_songs_latex_chord_parser(latex: str, normal: str):
     assert ModifiedSongsLatexChordParser().parse(latex) == DefaultChordParser().parse(normal)
+
+
+def test_modif_songs_latex_chord_parser_infloop():
+    ModifiedSongsLatexFormat()._parse_strophe("emptyv\n\\chordson\n\\[A]Óó\\[D]{ó\\ldots}\n\\cl", num=2, chords_on=False)
+

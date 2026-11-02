@@ -1,4 +1,5 @@
 import abc
+import uuid
 from abc import ABC
 import collections
 import copy
@@ -203,24 +204,25 @@ class Repetition(BaseStropheSegmentCollection):
         ]
 
 
-@dataclasses.dataclass
-class RepeatedStrophePart(BaseStropheSegmentCollection):
-    """A part of a strophe repeat that is identical to the repeated strophe (unmodified)."""
-
-    segments: list[StropheSegment]
-
-    def __add__(self, other: str) -> Self:
-        return self.__class__(segments=self.segments[:-1] + [self.segments[-1] + other])
-
-    def __sub__(self, other: str) -> Self:
-        return self.__class__(segments=self.segments[:-1] + [self.segments[-1] - other])
-
-    @property
-    def text(self) -> str:
-        return "".join(seg.text for seg in self.segments)
-
-    def splitlines(self) -> list[Self]:
-        return [self.__class__(segments=[subseg for seg in self.segments for subseg in seg.splitlines()])]
+# Removed because determining repeated strophe parts is not meaningfully possible.
+# @dataclasses.dataclass
+# class RepeatedStrophePart(BaseStropheSegmentCollection):
+#     """A part of a strophe repeat that is identical to the repeated strophe (unmodified)."""
+#
+#     segments: list[StropheSegment]
+#
+#     def __add__(self, other: str) -> Self:
+#         return self.__class__(segments=self.segments[:-1] + [self.segments[-1] + other])
+#
+#     def __sub__(self, other: str) -> Self:
+#         return self.__class__(segments=self.segments[:-1] + [self.segments[-1] - other])
+#
+#     @property
+#     def text(self) -> str:
+#         return "".join(seg.text for seg in self.segments)
+#
+#     def splitlines(self) -> list[Self]:
+#         return [self.__class__(segments=[subseg for seg in self.segments for subseg in seg.splitlines()])]
 
 
 class StropheMark(ABC):
@@ -424,6 +426,15 @@ class CapoAnnotation(Annotation):
 
 
 @dataclasses.dataclass
+class TransposeAnnotation(Annotation):
+    fret: int
+    is_chord_annotation: ClassVar[bool] = True
+
+    def to_string(self, delimiter: str) -> str:
+        return "Transpose" + delimiter + str(self.fret)
+
+
+@dataclasses.dataclass
 class PickAnnotation(Annotation):
     pattern: str
     is_chord_annotation: ClassVar[bool] = True
@@ -519,11 +530,13 @@ class Song:
         ]
 
     def normalized(self) -> "Song":
+        dup_items = copy.deepcopy(self.items)
+        linked = self._link_strophe_repeats(dup_items)
         return Song(
             annotations=copy.deepcopy(self.annotations),
             items=self._fill_initial_unknown_chord_segments(
                 self._recognize_codas(
-                    self._infer_chorus_repetition(self._link_strophe_repeats(copy.deepcopy(self.items)))
+                    self._infer_chorus_repetition(linked)
                 )
             ),
         )
@@ -533,6 +546,7 @@ class Song:
         linked_items = []
         for i, item in enumerate(items):
             if isinstance(item, RepeatStropheWithSameMark):
+                # Find the strophe to repeat.
                 for j, link_item in reversed(list(enumerate(items[:i]))):
                     if (
                         isinstance(link_item, Strophe)
@@ -543,15 +557,22 @@ class Song:
                 else:
                     raise ValueError(f"cannot find strophe of mark {item.mark} to repeat")
                 if item.segments:
-                    first_segment_text = item.segments[0].text
-                    for i, seg in enumerate(link_item.segments):
-                        if first_segment_text in seg.text:
-                            break
-                    break_segment = dataclasses.replace(seg, text=seg.text[: seg.text.find(first_segment_text)])
-                    result_segments = [
-                        RepeatedStrophePart(link_item.segments[:i] + [break_segment])
-                    ] + cls._ffill_chord(item.segments, break_segment)
-                    result_item = ModifiedStropheRepeat(repeated_strophe=link_item, segments=result_segments)
+                    # This is a repeat of the strophe, but modified. Inferring the exact form of the strophe is not
+                    # meaningfully possible, except for the reader. Preserving the info.
+                    # for seg in item.segments:
+                    #     if isinstance(seg, StropheSegment):
+                    #         first_segment_text = seg.text
+                    #         break
+                    # else:
+                    #     first_segment_text = str(uuid.uuid4())  # something that will never appear
+                    # for i, lseg in enumerate(link_item.segments):
+                    #     if isinstance(lseg, StropheSegment) and first_segment_text in lseg.text:
+                    #         break
+                    # break_segment = dataclasses.replace(lseg, text=lseg.text[: lseg.text.find(first_segment_text)])
+                    # result_segments = [
+                    #     RepeatedStrophePart(link_item.segments[:i] + [break_segment])
+                    # ] + cls._ffill_chord(item.segments, break_segment)
+                    result_item = ModifiedStropheRepeat(repeated_strophe=link_item, segments=item.segments)
                 else:
                     result_item = SimpleStropheRepeat(repeated_strophe=link_item)
                 linked_items.append(result_item)
@@ -567,7 +588,10 @@ class Song:
         for seg in segments:
             if hasattr(seg, "chord"):
                 break
-            out_segments.append(ChordedSegment(chord=source_segment.chord, text=seg.text))
+            elif isinstance(seg, StropheSegment):
+                out_segments.append(ChordedSegment(chord=source_segment.chord, text=seg.text))
+            else:
+                out_segments.append(seg)
         return out_segments + segments[len(out_segments) :]
 
     @staticmethod
