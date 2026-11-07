@@ -1,9 +1,10 @@
 import abc
+import copy
 from collections.abc import Callable, Generator
 import dataclasses
 import logging
-import re
 from pathlib import Path
+import re
 from typing import ClassVar, cast
 
 from pysongbook.format.chord import ChordParser, TextChordParser
@@ -345,14 +346,14 @@ class ModifiedSongsLaTeXFormat(SongFormat):
         default_factory=lambda: {re.compile(r"\s+\n"): "\n"}
     )
     text_dump_repls: dict[str, str] = dataclasses.field(
-        default_factory=lambda: {
-            "\n": "\\\\\n",
-            "...": "\\ldots{}",
-            " - ": "~-- ",
-        }
+        default_factory=lambda: {"\n": "\\\\\n", "...": "\\ldots{}", " - ": "~-- "}
     )
     text_dump_patterns: dict[re.Pattern[str], str] = dataclasses.field(
-        default_factory=lambda: {re.compile(r"\((?P<inner>[^\\)]+)\)"): r"\\emph{(\1)}"}
+        default_factory=lambda: {
+            re.compile(r"(?<!\w)~-- "): " -- ",
+            re.compile(r"\((?P<inner>[^\\)]+)\)"): r"\\emph{(\1)}",
+            re.compile(r"(?<=\n)\\\\"): "",  # remove LaTeX line breaks (\\) terminating empty lines (TeX error)
+        }
     )
     repcommands: dict[StropheMark, str] = dataclasses.field(
         default_factory=lambda: {
@@ -361,7 +362,7 @@ class ModifiedSongsLaTeXFormat(SongFormat):
             NumberedChorusMark(number=2): "repchorusii",
         }
     )
-    no_chord_brace_length_multiple: float = 1.75
+    no_chord_brace_length_multiple: float = 2.01
     no_chord_brace_length: int = 3
     segment_command_parsers: list[LaTeXSegmentCommandParser] = dataclasses.field(
         default_factory=lambda: [
@@ -569,6 +570,7 @@ class ModifiedSongsLaTeXFormat(SongFormat):
     def _join_strophe_segments(  # noqa: C901  # no time
         cls, segments: list[StropheSegment | ProcessingInstruction], chords_on: bool
     ) -> list[StropheSegment | ProcessingInstruction]:
+        prev_segments = copy.deepcopy(segments)
         seg_i = 0
         current_chords_on = chords_on
         while seg_i < len(segments):
@@ -796,7 +798,7 @@ class ModifiedSongsLaTeXFormat(SongFormat):
         elif isinstance(annot, NoteAnnotation):
             return f"\\musicnote{{{annot.text}}}"
         elif isinstance(annot, FadeOutAnnotation):
-            return "\\freev\\fadeout\\emptyspace\\\\cl\n"
+            return "\\freev\\fadeout\\emptyspace\\\\\\cl\n"
         elif isinstance(annot, ShowChordTab):
             # \showchordtab{C/G}{332010:342010}{1.5}{10}{4}
             return (
@@ -887,22 +889,25 @@ class ModifiedSongsLaTeXFormat(SongFormat):
                 yield "\n\\chordson\n"
             dumped_chord = self.dump_chord(seg.chord)
             yield f"\\[{dumped_chord}]"
-            if seg.text and not seg.text.isspace():
-                if "\n" in seg.text:
+            if seg.text:
+                if seg.text.isspace() and "\n" not in seg.text:
+                    yield " "
+                elif "\n" in seg.text:
                     first_line, other_lines = seg.text.split("\n", maxsplit=1)
                     if first_line:
+                        # TODO measure dumped chord length better (hidx/didx are smaller, etc.)
                         yield self._dump_chorded_text(first_line, len(dumped_chord), endline=True)
-                        yield "\\\\\n"
+                    yield "\\\\\n"
                     yield self.dump_text(other_lines)
                 else:
                     yield self._dump_chorded_text(seg.text, len(dumped_chord))
         elif isinstance(seg, UnchordedSegment | UnknownChordSegment) or (
             isinstance(seg, ChordedSegment) and not chords
         ):
-            if chords and isinstance(prev_seg, ChordedSegment):
+            if chords and isinstance(prev_seg, ChordedSegment | UnknownChordSegment):
                 yield "\n\\chordsoff\n"
-            if isinstance(seg, UnknownChordSegment) and prev_seg is not None:
-                pass  # TODO warn that we have unknown chording elsewhere than start of strophe
+            if isinstance(seg, UnknownChordSegment) and isinstance(prev_seg, UnchordedSegment):
+                yield "\n\\chordson\n"
             yield self.dump_text(seg.text)
         elif isinstance(seg, RepeatCount):
             yield f"\\rep{{{seg.n_repeats}}}"
@@ -946,11 +951,11 @@ class ModifiedSongsLaTeXFormat(SongFormat):
                 modif_groups[-1][1].append(modif.to_string())
             else:
                 modif_groups.append((modif.level, [modif.to_string()]))
-        dumped = [chord.root.replace("#", "\\shrp{}")]
+        dumped = [chord.root]
         for level, group in modif_groups:
             dumped_group = "".join(group)
             dumped.append(self.chord_level_commands[level].format(dumped_group))
-        return "".join(dumped)
+        return "".join(dumped).replace("#", "\\shrp{}").replace("b", "\\flt{}")
 
     def dump_text(self, some_text: str) -> str:
         if '"' in some_text:
@@ -977,7 +982,7 @@ class ModifiedSongsLaTeXFormat(SongFormat):
     @property
     def standalone_init_text(self):
         if self._standalone_init_text is None:
-            with open(Path(__file__).parent / "modif_songs_latex_init.tex", "r", encoding="utf8") as f:
+            with (Path(__file__).parent / "modif_songs_latex_init.tex").open(encoding="utf8") as f:
                 self._standalone_init_text = f.read()
         return self._standalone_init_text
 

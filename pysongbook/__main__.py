@@ -10,6 +10,7 @@ from pysongbook.input import get_inputs, parse_inputs
 from pysongbook.modify import NORMALIZER
 from pysongbook.output import serialize_outputs, write_outputs
 
+
 FORMATS = [BracketFormat, AgamaFormat, ModifiedSongsLaTeXFormat, ModelDictFormat]
 
 formats_by_name = {f.name: f for f in FORMATS} | {on: f for f in FORMATS for on in f.other_names}
@@ -29,7 +30,9 @@ parser.add_argument("-f", "--in-format", default="bracket", help="songbook forma
 parser.add_argument("-F", "--out-format", default="bracket", help="songbook format to produce on output")
 parser.add_argument("-m", "--in-multisong", action="store_true", help="input file(s) contain multiple songs")
 parser.add_argument("-M", "--out-multisong", action="store_true", help="output file(s) contain multiple songs")
-parser.add_argument("-S", "--out-non-standalone", action="store_true", help="do not output standalone presentable file(s)")
+parser.add_argument(
+    "-S", "--out-non-standalone", action="store_true", help="do not output standalone presentable file(s)"
+)
 parser.add_argument("-p", "--in-param", action="append", nargs=2, help="parameters to the input format parser")
 parser.add_argument("-P", "--out-param", action="append", nargs=2, help="parameters to the output format serializer")
 parser.add_argument("-c", "--encoding", default="utf8", help="input file(s) encoding")
@@ -53,6 +56,8 @@ if __name__ == "__main__":
     else:
         normalized = parsed
     logging.debug("Serializing output")
-    serialized = serialize_outputs(normalized, output_format, multi=args.out_multisong, standalone=not args.out_non_standalone)
+    serialized = serialize_outputs(
+        normalized, output_format, multi=args.out_multisong, standalone=not args.out_non_standalone
+    )
     logging.debug("Writing output")
     write_outputs(serialized, args.output)

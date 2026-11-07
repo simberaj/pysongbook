@@ -10,8 +10,7 @@ from pysongbook.format.modif_songs_latex import ModifiedSongsLatexChordParser, M
 from pysongbook.modify import NORMALIZER
 
 
-# inputs_path = Path(__file__).parent / "data"
-inputs_path = Path(__file__).parent.parent / "playground" / "all"
+inputs_path = Path(__file__).parent / "data"
 expected_outputs_path = Path(__file__).parent / "expected_out"
 
 
@@ -33,6 +32,8 @@ def test_modif_songs_latex_parser(input_texs: dict[str, str], expected_output_te
     format = ModifiedSongsLaTeXFormat()
     dump_format = ModelDictFormat()
     for name, text in input_texs.items():
+        # if "slunko" not in name:
+        #     continue
         song = NORMALIZER.modify(format.loads(text))
         result = format.dumps(song, chords=True)
         dump_format.dumps(song)

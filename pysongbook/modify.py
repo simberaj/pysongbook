@@ -1,12 +1,15 @@
 import abc
 from collections import Counter
+import copy
 import dataclasses
 import itertools
 from typing import cast
 
 from pysongbook.model import (
     Annotation,
+    BaseStropheSegmentCollection,
     ChordedSegment,
+    ChordlessSegment,
     ChorusMark,
     CodaMark,
     LetteredStropheMark,
@@ -16,6 +19,7 @@ from pysongbook.model import (
     SimpleStropheRepeat,
     Song,
     Strophe,
+    StropheSegment,
     UnknownChordSegment,
 )
 
@@ -134,6 +138,32 @@ class RecognizeCodas(SongItemModifier):
         return items
 
 
+class StripLeadingWhitespace(SongItemModifier):
+    def modify_items(self, items: list[Strophe | Annotation]) -> list[Strophe | Annotation]:
+        out_items = []
+        for item in items:
+            if isinstance(item, Strophe):
+                strophe = copy.deepcopy(item)
+                self._lstrip(strophe.segments)
+                out_items.append(strophe)
+            else:
+                out_items.append(item)
+        return out_items
+
+    def _lstrip(self, segments: list[StropheSegment]) -> None:
+        if not segments:
+            return
+        first_seg = segments[0]
+        if isinstance(first_seg, ChordedSegment):
+            return
+        if isinstance(first_seg, ChordlessSegment):
+            first_seg.text = first_seg.text.lstrip()
+        elif isinstance(first_seg, BaseStropheSegmentCollection):
+            self._lstrip(first_seg.segments)
+        else:  # embedded annotations etc.
+            self._lstrip(segments[1:])
+
+
 @dataclasses.dataclass(frozen=True)
 class CompositeModifier(SongModifier):
     modifiers: list[SongModifier]
@@ -145,5 +175,11 @@ class CompositeModifier(SongModifier):
 
 
 NORMALIZER = CompositeModifier(
-    modifiers=[LinkStropheRepeats(), InferChorusRepetition(), FillInitialUnknownChordSegments(), RecognizeCodas()]
+    modifiers=[
+        LinkStropheRepeats(),
+        InferChorusRepetition(),
+        FillInitialUnknownChordSegments(),
+        RecognizeCodas(),
+        StripLeadingWhitespace(),
+    ]
 )

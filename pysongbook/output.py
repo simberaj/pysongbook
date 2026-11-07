@@ -1,6 +1,6 @@
 import logging
-import sys
 from pathlib import Path
+import sys
 
 from pysongbook.format.core import SongFormat
 from pysongbook.model import Song
@@ -25,7 +25,9 @@ def write_outputs(outputs: list[tuple[str, str]], output_path: Path | None) -> N
                 output_file.write(output)
 
 
-def serialize_outputs(songs: list[tuple[str, Song]], parser_format: SongFormat, multi: bool, standalone: bool) -> list[tuple[str, str]]:
+def serialize_outputs(
+    songs: list[tuple[str, Song]], parser_format: SongFormat, multi: bool, standalone: bool
+) -> list[tuple[str, str]]:
     if not parser_format.can_write:
         raise ValueError(f"format {type(parser_format)!r} has no write capability")
     if multi and not parser_format.can_merge:
