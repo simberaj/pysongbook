@@ -88,11 +88,11 @@ class ModelDictFormat(SongFormat):
         return json.dumps(dataclasses.asdict(song))
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(frozen=True)
 class CommandArgSetting:
     min_args: int = 0
     max_args: int = 1
-    raw_args: list[int] = dataclasses.field(default_factory=list)
+    raw_args: tuple[int, ...] = ()
 
 
 def process_chords_on_instructions(annots: list[Annotation]) -> tuple[bool | None, list[Annotation]]:

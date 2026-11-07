@@ -4,7 +4,7 @@ import warnings
 import pytest
 
 from pysongbook.format.chord import TextChordParser
-from pysongbook.format.modif_songs_latex import ModifiedSongsLatexChordParser, ModifiedSongsLatexFormat
+from pysongbook.format.modif_songs_latex import ModifiedSongsLatexChordParser, ModifiedSongsLaTeXFormat
 from pysongbook.modify import NORMALIZER
 
 
@@ -28,7 +28,7 @@ def expected_output_texs() -> dict[str, str]:
 
 
 def test_modif_songs_latex_parser(input_texs: dict[str, str], expected_output_texs: dict[str, str]):
-    format = ModifiedSongsLatexFormat()
+    format = ModifiedSongsLaTeXFormat()
     for name, text in input_texs.items():
         song = NORMALIZER.modify(format.loads(text))
         result = format.dumps(song, chords=True)
@@ -52,6 +52,6 @@ def test_modif_songs_latex_chord_parser(latex: str, normal: str):
 
 
 def test_modif_songs_latex_chord_parser_infloop():
-    ModifiedSongsLatexFormat()._parse_strophe(
+    ModifiedSongsLaTeXFormat()._parse_strophe(
         "emptyv\n\\chordson\n\\[A]Óó\\[D]{ó\\ldots}\n\\cl", num=2, chords_on=False
     )

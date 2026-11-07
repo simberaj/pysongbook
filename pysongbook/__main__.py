@@ -5,12 +5,12 @@ from pathlib import Path
 from pysongbook.format.agama import AgamaFormat
 from pysongbook.format.bracket import BracketFormat
 from pysongbook.format.core import ModelDictFormat
-from pysongbook.format.modif_songs_latex import ModifiedSongsLatexFormat
+from pysongbook.format.modif_songs_latex import ModifiedSongsLaTeXFormat
 from pysongbook.input import get_inputs, parse_inputs
 from pysongbook.modify import NORMALIZER
 
 
-FORMATS = [BracketFormat, AgamaFormat, ModifiedSongsLatexFormat]
+FORMATS = [BracketFormat, AgamaFormat, ModifiedSongsLaTeXFormat]
 
 formats_by_name = {f.name: f for f in FORMATS}
 

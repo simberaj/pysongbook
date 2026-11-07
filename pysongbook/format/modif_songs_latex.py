@@ -1,10 +1,10 @@
-from collections.abc import Callable, Generator, Mapping
+import abc
+from collections.abc import Callable, Generator
 import dataclasses
 import functools
 import logging
 import re
-from types import MappingProxyType
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from pysongbook.format.chord import ChordParser, TextChordParser
 from pysongbook.format.core import (
@@ -79,8 +79,204 @@ class ModifiedSongsLatexChordParser(ChordParser):
         return parsed
 
 
+class LaTeXSegmentCommandParser(abc.ABC):
+    command_name: str
+    arg_setting: ClassVar[CommandArgSetting] = CommandArgSetting()
+
+    @abc.abstractmethod
+    def parse(self, segs: list[StropheSegment | ProcessingInstruction]) -> list[StropheSegment | ProcessingInstruction]:
+        raise NotImplementedError
+
+
 @dataclasses.dataclass
-class ModifiedSongsLatexFormat(SongFormat):
+class SimpleCommandParser(LaTeXSegmentCommandParser):
+    command_name: str
+    result: list[StropheSegment | ProcessingInstruction]
+
+    def parse(self, segs: list[StropheSegment | ProcessingInstruction]) -> list[StropheSegment | ProcessingInstruction]:
+        if segs:
+            logging.warning(f"Skipping inner content for empty-content command {self.command_name}: {segs!r}")
+        return self.result
+
+
+@dataclasses.dataclass
+class PassthroughSegmentCommandParser(LaTeXSegmentCommandParser):
+    command_name: str
+
+    def parse(self, segs: list[StropheSegment | ProcessingInstruction]) -> list[StropheSegment | ProcessingInstruction]:
+        return segs
+
+
+class QuotesCommandParser(LaTeXSegmentCommandParser):
+    command_name = "uv"
+
+    def parse(self, segs: list[StropheSegment | ProcessingInstruction]) -> list[StropheSegment | ProcessingInstruction]:
+        return [IndeterminateChordingSegment('"'), *segs, IndeterminateChordingSegment('"')]
+
+
+class RepetitionCommandParser(LaTeXSegmentCommandParser):
+    command_name = "reppart"
+
+    def parse(self, segs: list[StropheSegment | ProcessingInstruction]) -> list[StropheSegment | ProcessingInstruction]:
+        return [Repetition(cast(list[StropheSegment], segs))]
+
+
+class RepeatCountCommandParser(LaTeXSegmentCommandParser):
+    command_name = "rep"
+
+    def parse(self, segs: list[StropheSegment | ProcessingInstruction]) -> list[StropheSegment | ProcessingInstruction]:
+        return [RepeatCount(int(segs[0].text))]
+
+
+class BaseStropheRepetitionCommandParser(LaTeXSegmentCommandParser, abc.ABC):
+    @staticmethod
+    def _parse(
+        segs: list[StropheSegment | ProcessingInstruction], mark: StropheMark
+    ) -> list[StropheSegment | ProcessingInstruction]:
+        if segs and isinstance(segs[-1], RepeatCount):
+            n_repeats = segs[-1].n_repeats
+            segs.pop()
+        else:
+            n_repeats = 1
+        emb_strophe = EmbeddedStrophe(RepeatStropheWithSameMark(mark=mark, segments=cast(list[StropheSegment], segs)))
+        return [emb_strophe] * n_repeats
+
+
+@dataclasses.dataclass
+class FixedStropheMarkRepetitionCommandParser(BaseStropheRepetitionCommandParser):
+    command_name: str
+    mark: StropheMark
+
+    def parse(self, segs: list[StropheSegment | ProcessingInstruction]) -> list[StropheSegment | ProcessingInstruction]:
+        return self._parse(segs, self.mark)
+
+
+class StropheRepetitionCommandParser(BaseStropheRepetitionCommandParser):
+    command_name: str = "repsec"
+    arg_setting: ClassVar[CommandArgSetting] = CommandArgSetting(min_args=2, max_args=2, raw_args=())
+
+    def parse(
+        self,
+        segs: list[StropheSegment | ProcessingInstruction],
+        mark_segs: list[StropheSegment | ProcessingInstruction],
+    ) -> list[StropheSegment | ProcessingInstruction]:
+        mark = self._parse_strophe_mark(mark_segs)
+        return self._parse(segs, mark)
+
+    @staticmethod
+    def _parse_strophe_mark(mark_segs: list[StropheSegment | ProcessingInstruction]) -> StropheMark:
+        if len(mark_segs) != 1:
+            raise ValueError(f"invalid repsec marker: {mark_segs!r}")
+        marker = mark_segs[0]
+        if isinstance(marker, EmbeddedStropheMark):
+            return marker.mark
+        elif isinstance(marker, ChordlessSegment) and marker.text.strip().isdigit():
+            return NumberedStropheMark(int(marker.text.strip()))
+        else:
+            raise ValueError(f"invalid repsec marker: {marker!r}")
+
+
+@dataclasses.dataclass
+class FixedEmbeddedAnnotationCommandParser(LaTeXSegmentCommandParser):
+    command_name: str
+    annotation: Annotation
+    arg_setting: ClassVar[CommandArgSetting] = CommandArgSetting(min_args=0, max_args=0, raw_args=())
+
+    def parse(self) -> list[StropheSegment | ProcessingInstruction]:
+        return [EmbeddedAnnotation(self.annotation)]
+
+
+@dataclasses.dataclass
+class LaTeXAnnotationCommandParser(abc.ABC):
+    command_name: str
+    arg_setting: ClassVar[CommandArgSetting] = CommandArgSetting(min_args=1, max_args=1, raw_args=(0,))
+
+    @abc.abstractmethod
+    def parse(self, arg: str) -> list[Annotation]:
+        raise NotImplementedError
+
+
+class CapoAnnotationParser(LaTeXAnnotationCommandParser):
+    command_name = "capo"
+
+    def parse(self, arg: str) -> list[CapoAnnotation]:
+        return [CapoAnnotation(int(arg))]
+
+
+class TransposeAnnotationParser(LaTeXAnnotationCommandParser):
+    command_name = "transpose"
+
+    def parse(self, arg: str) -> list[TransposeAnnotation]:
+        return [TransposeAnnotation(int(arg))]
+
+
+class PickAnnotationParser(LaTeXAnnotationCommandParser):
+    command_name = "pick"
+
+    def parse(self, arg: str) -> list[PickAnnotation]:
+        return [PickAnnotation(arg)]
+
+
+class MusicNoteAnnotationParser(LaTeXAnnotationCommandParser):
+    command_name = "musicnote"
+
+    def parse(self, arg: str) -> list[NoteAnnotation]:
+        return [NoteAnnotation(arg)]
+
+
+class ChordTabAnnotationParser(LaTeXAnnotationCommandParser):
+    command_name = "showchordtab"
+    arg_setting: ClassVar[CommandArgSetting] = CommandArgSetting(min_args=5, max_args=5, raw_args=(0, 1, 2, 3, 4))
+    chord_parser: ChordParser = ModifiedSongsLatexChordParser()
+
+    def parse(self, chord_mark: str, layout: str, width: str, hpos: str, vpos: str) -> list[ShowChordTab]:
+        fret, positions, fingers = self._parse_layout(layout)
+        return [
+            ShowChordTab(
+                chord=self.chord_parser.parse(chord_mark),
+                fret=fret,
+                positions=positions,
+                fingers=fingers,
+                width=float(width),
+                hpos=float(hpos),
+                vpos=float(vpos),
+            )
+        ]
+
+    def _parse_layout(self, layout: str) -> tuple[int, StringPositions, StringPositions | None]:
+        parts = layout.split(":")
+        if len(parts) == 1:
+            fret = 0
+            positions = self._parse_string_positions(parts[0])
+            fingers = None
+        elif len(parts) == 2:
+            if len(parts[0]) < 6:
+                fret = int(parts[0])
+                positions = self._parse_string_positions(parts[1])
+                fingers = None
+            else:
+                fret = 0
+                positions = self._parse_string_positions(parts[0])
+                fingers = self._parse_string_positions(parts[1])
+        elif len(parts) == 3:
+            fret = int(parts[0])
+            positions = self._parse_string_positions(parts[1])
+            fingers = self._parse_string_positions(parts[2])
+        else:
+            raise ValueError(f"invalid showchordtab layout: {layout!r}")
+        return fret, positions, fingers
+
+    @staticmethod
+    def _parse_string_positions(position_str: str) -> StringPositions:
+        if len(position_str) != 6:
+            raise ValueError(f"invalid guitar string positions: {position_str!r}, must have length exactly 6")
+        chars = list(position_str)
+        positions = tuple(int(char) if char.lower() != "x" else None for char in chars)
+        return cast(StringPositions, positions)
+
+
+@dataclasses.dataclass
+class ModifiedSongsLaTeXFormat(SongFormat):
     name: ClassVar[str] = "latex-songs-modif"
     can_read: ClassVar[bool] = True
     can_write: ClassVar[bool] = True
@@ -98,21 +294,19 @@ class ModifiedSongsLatexFormat(SongFormat):
             "intro": IntroMark,
             "solo": SoloMark,
             "bridge": BridgeMark,
-            "chorusi": functools.partial(NumberedChorusMark, number=1),
-            "chorusii": functools.partial(NumberedChorusMark, number=2),
-            "averse": functools.partial(LetteredStropheMark, letter="A"),
-            "bverse": functools.partial(LetteredStropheMark, letter="B"),
-            "cverse": functools.partial(LetteredStropheMark, letter="C"),
+            "chorusi": NumberedChorusMark(number=1),
+            "chorusii": NumberedChorusMark(number=2),
+            "averse": LetteredStropheMark(letter="A"),
+            "bverse": LetteredStropheMark(letter="B"),
+            "cverse": LetteredStropheMark(letter="C"),
             "recite": RecitationMark,
         }
     )
     numbered_beginverse_command: str = "num"
     endverse_commands: list[str] = dataclasses.field(default_factory=lambda: ["fin", "cl"])
-    endverse_pattern: re.Pattern[str] = re.compile(r"\\(?:" + "|".join(endverse_commands) + r")\b")
     strophe_token_pattern: re.Pattern[str] = re.compile(r"([]\\[{}])")
     command_name_pattern: re.Pattern[str] = re.compile(r"\w+")
     whitespace_pattern: re.Pattern[str] = re.compile(r"\s+")
-    noop_commands: list[str] = dataclasses.field(default_factory=lambda: ["emptyspace", r"\\", "qquad"])
     chord_parser: ChordParser = dataclasses.field(default_factory=lambda: ModifiedSongsLatexChordParser())
     chord_level_commands: dict[int, str] = dataclasses.field(
         default_factory=lambda: {
@@ -134,14 +328,6 @@ class ModifiedSongsLatexFormat(SongFormat):
             SoloMark(): "nsolo",
             BridgeMark(): "nbridge",
             RecitationMark(): "nrecite",
-        }
-    )
-    simple_text_commands: dict[str, list[StropheSegment | ProcessingInstruction]] = dataclasses.field(
-        default_factory=lambda: {
-            "chordson": [TurnChordsOn()],
-            "chordsoff": [TurnChordsOff()],
-            "ldots": [IndeterminateChordingSegment("...")],
-            "endsong": [],
         }
     )
     text_load_repls: dict[str, str] = dataclasses.field(
@@ -172,28 +358,55 @@ class ModifiedSongsLatexFormat(SongFormat):
     )
     no_chord_brace_length_multiple: float = 1.75
     no_chord_brace_length: int = 3
-    command_arg_settings: dict[str, CommandArgSetting] = dataclasses.field(
-        default_factory=lambda: {
-            "capo": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
-            "transpose": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
-            "pick": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
-            "musicnote": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
-            "repsec": CommandArgSetting(min_args=2, max_args=2, raw_args=[]),
-            "fadeout": CommandArgSetting(min_args=0, max_args=0, raw_args=[]),
-            "showchordtab": CommandArgSetting(min_args=5, max_args=5, raw_args=[0, 1, 2, 3, 4]),
-        }
+    segment_command_parsers: list[LaTeXSegmentCommandParser] = dataclasses.field(
+        default_factory=lambda: [
+            SimpleCommandParser(command_name="chordson", result=[TurnChordsOn()]),
+            SimpleCommandParser(command_name="chordsoff", result=[TurnChordsOff()]),
+            SimpleCommandParser(command_name="ldots", result=[IndeterminateChordingSegment("...")]),
+            SimpleCommandParser(command_name="endsong", result=[]),
+            SimpleCommandParser(command_name="emptyspace", result=[]),
+            SimpleCommandParser(command_name=r"\\", result=[]),
+            SimpleCommandParser(command_name="qquad", result=[]),
+            PassthroughSegmentCommandParser(command_name="cseq"),
+            PassthroughSegmentCommandParser(command_name="emph"),
+            QuotesCommandParser(),
+            RepeatCountCommandParser(),
+            RepetitionCommandParser(),
+            FixedEmbeddedAnnotationCommandParser(command_name="fadeout", annotation=FadeOutAnnotation()),
+            StropheRepetitionCommandParser(),
+        ]
+    )
+    annotation_command_parsers: list[LaTeXAnnotationCommandParser] = dataclasses.field(
+        default_factory=lambda: [
+            CapoAnnotationParser(),
+            TransposeAnnotationParser(),
+            PickAnnotationParser(),
+            MusicNoteAnnotationParser(),
+            ChordTabAnnotationParser(),
+        ]
     )
 
     def __post_init__(self):
         super().__init__()
-        self.complex_text_commands["showchordtab"] = self._parse_showchordtab
         for mark, command in self.strophe_mark_commands.items():
-            self.simple_text_commands[command] = [EmbeddedStropheMark(mark)]
+            self.segment_command_parsers.append(
+                SimpleCommandParser(command_name=command, result=[EmbeddedStropheMark(mark)])
+            )
         self.simple_beginverse_command_names = {v(): k for k, v in self.simple_beginverse_commands.items()}
         self.simple_beginverse_command_names[CodaMark()] = "cverse"
         self.beginverse_commands = [self.numbered_beginverse_command, *self.simple_beginverse_commands.keys()]
         self.strophe_split_pattern = re.compile(r"\\(?=(?:" + "|".join(self.beginverse_commands) + r")\b)")
         self.text_dump_repls |= {v: k for k, v in self.text_load_repls.items()}
+        self.endverse_pattern: re.Pattern[str] = re.compile(r"\\(?:" + "|".join(self.endverse_commands) + r")\b")
+        self.segment_command_parsers.extend(
+            [
+                FixedStropheMarkRepetitionCommandParser(command_name=cmd, mark=mark)
+                for mark, cmd in self.repcommands.items()
+            ]
+        )
+        self.command_parsers_by_name: dict[str, LaTeXSegmentCommandParser | LaTeXAnnotationCommandParser] = {
+            cmd.command_name: cmd for cmd in (*self.segment_command_parsers, *self.annotation_command_parsers)
+        }
 
     def loads(self, song_text: str) -> Song:
         annotations, remnant = self._parse_beginsong(song_text)
@@ -227,7 +440,7 @@ class ModifiedSongsLatexFormat(SongFormat):
         match = self.beginsong_pattern.match(song_text)
         if not match:
             raise SongParseError("\\beginsong not found at beginning of song")
-        annotations = [TitleAnnotation(match.group("title"))]
+        annotations: list[Annotation] = [TitleAnnotation(match.group("title"))]
         other_annot_str = match.group("annots")
         while other_annot_str:
             annot_match = self.beginsong_annot_pattern.match(other_annot_str)
@@ -416,24 +629,16 @@ class ModifiedSongsLatexFormat(SongFormat):
             raise PositionalSongParseError("expecting command name", text, pos)
         command_name = command_name_match.group()
         post_command_name_pos = pos + len(command_name)
-        args, after_pos = self._parse_command_args(
-            text, post_command_name_pos, setting=self.command_arg_settings.get(command_name, CommandArgSetting())
-        )
+        if command_name not in self.command_parsers_by_name:
+            raise PositionalSongParseError(f"unknown command: {command_name!r}", text, pos)
+        parser = self.command_parsers_by_name[command_name]
+        args, after_pos = self._parse_command_args(text, post_command_name_pos, setting=parser.arg_setting)
         if not args:
             # skip whitespace after command name if no braces present
             after_pos = post_command_name_pos + (
                 len(text[post_command_name_pos:]) - len(text[post_command_name_pos:].lstrip())
             )
-        if command_name in self.simple_text_commands:
-            if args and args[0]:
-                raise PositionalSongParseError("nonempty contents of simple command", text, pos)
-            return self.simple_text_commands[command_name], after_pos
-        elif command_name in self.noop_commands:
-            return (args[0] if args else []), after_pos
-        else:
-            if command_name not in self.complex_text_commands:
-                raise RuntimeError(f"unknown command: {command_name}")
-            return self.complex_text_commands[command_name](*args), after_pos
+        return parser.parse(*args), after_pos
 
     def _parse_command_args(
         self, text: str, pos: int, setting: CommandArgSetting
@@ -547,74 +752,6 @@ class ModifiedSongsLatexFormat(SongFormat):
             n_repeats = 1
         emb_strophe = EmbeddedStrophe(RepeatStropheWithSameMark(mark=mark, segments=segs))
         return [emb_strophe] * n_repeats
-
-    def _parse_showchordtab(self, chord_mark: str, layout: str, width: str, hpos: str, vpos: str) -> list[ShowChordTab]:
-        fret, positions, fingers = self._parse_showchordtab_layout(layout)
-        return [
-            ShowChordTab(
-                chord=self.chord_parser.parse(chord_mark),
-                fret=fret,
-                positions=positions,
-                fingers=fingers,
-                width=float(width),
-                hpos=float(hpos),
-                vpos=float(vpos),
-            )
-        ]
-
-    def _parse_showchordtab_layout(self, layout: str) -> tuple[int, StringPositions, StringPositions | None]:
-        parts = layout.split(":")
-        if len(parts) == 1:
-            fret = 0
-            positions = self._parse_string_positions(parts[0])
-            fingers = None
-        elif len(parts) == 2:
-            if len(parts[0]) < 6:
-                fret = int(parts[0])
-                positions = self._parse_string_positions(parts[1])
-                fingers = None
-            else:
-                fret = 0
-                positions = self._parse_string_positions(parts[0])
-                fingers = self._parse_string_positions(parts[1])
-        elif len(parts) == 3:
-            fret = int(parts[0])
-            positions = self._parse_string_positions(parts[1])
-            fingers = self._parse_string_positions(parts[2])
-        else:
-            raise ValueError(f"invalid showchordtab layout: {layout!r}")
-        return fret, positions, fingers
-
-    @staticmethod
-    def _parse_string_positions(position_str: str) -> StringPositions:
-        if len(position_str) != 6:
-            raise ValueError(f"invalid guitar string positions: {position_str!r}, must have length exactly 6")
-        chars = list(position_str)
-        positions = tuple(int(char) if char.lower() != "x" else None for char in chars)
-        return positions
-
-    complex_text_commands: Mapping[
-        str,
-        Callable[[list[StropheSegment | ProcessingInstruction]], list[StropheSegment | ProcessingInstruction]]
-        | Callable[[str, ...], list[Annotation]],
-    ] = MappingProxyType(
-        {
-            "cseq": (lambda segs: segs),
-            "uv": (lambda segs: [IndeterminateChordingSegment('"'), *segs, IndeterminateChordingSegment('"')]),
-            "emph": (lambda segs: segs),
-            "rep": (lambda segs: [RepeatCount(int(segs[0].text))]),
-            "repchorus": functools.partial(_parse_repsec_marked, mark=ChorusMark()),
-            "repchorusi": functools.partial(_parse_repsec_marked, mark=NumberedChorusMark(number=1)),
-            "repchorusii": functools.partial(_parse_repsec_marked, mark=NumberedChorusMark(number=2)),
-            "capo": (lambda arg: [CapoAnnotation(int(arg))]),
-            "transpose": (lambda arg: [TransposeAnnotation(int(arg))]),
-            "pick": (lambda arg: [PickAnnotation(arg)]),
-            "musicnote": (lambda arg: [NoteAnnotation(arg)]),
-            "reppart": (lambda segs: [Repetition(segs)]),
-            "repsec": (lambda markers, segs, rm=_parse_repsec_marked, rr=_parse_repsec_marker: rm(segs, rr(markers))),
-            "fadeout": (lambda: [EmbeddedAnnotation(FadeOutAnnotation())]),
-        }
-    )
 
     def dumps(self, song: Song, chords: bool = True) -> str:
         parts = [self.dump_beginsong(song)]
@@ -830,7 +967,7 @@ if __name__ == "__main__":
     import pprint
 
     chords_path = Path(__file__).parent.parent / "test" / "data"
-    in_out_format = ModifiedSongsLatexFormat()
+    in_out_format = ModifiedSongsLaTeXFormat()
     for path in chords_path.iterdir():
         if path.suffix == ".tex" and "berousek" in str(path):
             text = path.open(encoding="utf8").read()
