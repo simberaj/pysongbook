@@ -3,7 +3,8 @@ import warnings
 
 import pytest
 
-from pysongbook.format import ModifiedSongsLatexChordParser, ModifiedSongsLatexFormat, TextChordParser
+from pysongbook.format.chord import TextChordParser
+from pysongbook.format.modif_songs_latex import ModifiedSongsLatexChordParser, ModifiedSongsLatexFormat
 
 
 # inputs_path = Path(__file__).parent / "data"

@@ -1,40 +1,17 @@
 import argparse
 import logging
 from pathlib import Path
-import sys
 
-import pysongbook.format
-import pysongbook.model
-
-
-FORMATS = {}
-for name in dir(pysongbook.io):
-    val = getattr(pysongbook.io, name)
-    if isinstance(val, type) and issubclass(val, pysongbook.io.SongFormat):
-        FORMATS[val.name] = val
+from pysongbook.format.agama import AgamaFormat
+from pysongbook.format.bracket import BracketFormat
+from pysongbook.format.core import ModelDictFormat
+from pysongbook.format.modif_songs_latex import ModifiedSongsLatexFormat
+from pysongbook.input import get_inputs, parse_inputs
 
 
-def get_inputs(input_path: Path | None, encoding: str) -> list[tuple[str, str]]:
-    if input_path is None:
-        inputs = [("stdin", sys.stdin.read())]
-    elif input_path.is_dir():
-        inputs = [
-            (str(fpath), fpath.open(encoding=encoding).read()) for fpath in input_path.iterdir() if fpath.is_file()
-        ]
-    else:
-        inputs = [(str(input_path), input_path.open(encoding=encoding).read())]
-    return inputs
+FORMATS = [BracketFormat, AgamaFormat, ModifiedSongsLatexFormat]
 
-
-def parse_inputs(inputs: list[tuple[str, str]], parser_format: pysongbook.io.SongFormat) -> list[pysongbook.model.Song]:
-    if not parser_format.can_read:
-        raise ValueError(f"format {type(parser_format)!r} has no read capability")
-    songs = []
-    for pathname, inp in inputs:
-        logging.info("Parsing %s", pathname)
-        songs.append(parser_format.loads(inp))
-    return songs
-
+formats_by_name = {f.name: f for f in FORMATS}
 
 parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
 parser.add_argument("input", type=Path, default=None, help="songbook file or folder to process, default uses stdin")
@@ -46,15 +23,15 @@ parser.add_argument("-F", "--out-format", default="default", help="songbook form
 parser.add_argument("-p", "--in-param", action="append", nargs=2, help="parameters to the input format parser")
 parser.add_argument("-P", "--out-param", action="append", nargs=2, help="parameters to the output format serializer")
 parser.add_argument("-c", "--encoding", default="utf8", help="input file(s) encoding")
-parser.add_argument("-N", "--no-normalize", action="store_true", help="input file(s) encoding")
+parser.add_argument("-N", "--no-normalize", action="store_true", help="do not normalize song representations")
 
 
 if __name__ == "__main__":
     args = parser.parse_args()
     logging.info("Creating parser format %s", args.in_format)
-    parser_format = FORMATS[args.in_format](**dict(args.in_param or []))
+    parser_format = formats_by_name[args.in_format](**dict(args.in_param or []))
     logging.info("Creating output format %s", args.out_format)
-    output_format = FORMATS[args.out_format](**dict(args.out_param or []))
+    output_format = formats_by_name[args.out_format](**dict(args.out_param or []))
     all_inputs = get_inputs(args.input, encoding=args.encoding)
     # TODO handle multi-song files
     parsed = parse_inputs(all_inputs, parser_format)
@@ -65,4 +42,4 @@ if __name__ == "__main__":
         normalized = parsed
     # TODO proper output, including merging
     for song in normalized:
-        print(pysongbook.io.ModelDictFormat().dumps(song))  # noqa: T201  # print intended
+        print(ModelDictFormat().dumps(song))  # noqa: T201  # print intended
