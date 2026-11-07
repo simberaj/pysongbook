@@ -37,13 +37,38 @@ class SongFormat(ABC):
     @abc.abstractmethod
     def name(self) -> str: ...
 
+    other_names: tuple[str, ...] = ()
+
     @property
     @abc.abstractmethod
     def can_read(self) -> bool: ...
 
+    def loads(self, song_text: str) -> Song:
+        raise NotImplementedError
+
     @property
     @abc.abstractmethod
     def can_write(self) -> bool: ...
+
+    def dumps(self, song: Song) -> str:
+        raise NotImplementedError
+
+    @property
+    @abc.abstractmethod
+    def can_split(self) -> bool: ...
+
+    def split(self, multisong_text: str) -> list[str]:
+        raise NotImplementedError
+
+    @property
+    @abc.abstractmethod
+    def can_merge(self) -> bool: ...
+
+    def merge(self, song_texts: list[str]) -> str:
+        raise NotImplementedError
+
+    def make_standalone(self, song_text: str) -> str:
+        return song_text
 
 
 @dataclasses.dataclass
@@ -83,6 +108,8 @@ class ModelDictFormat(SongFormat):
     name = "dict"
     can_read = False
     can_write = True
+    can_merge = False
+    can_split = False
 
     def dumps(self, song: Song) -> str:
         return json.dumps(dataclasses.asdict(song))

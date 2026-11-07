@@ -23,9 +23,12 @@ from pysongbook.model import (
 
 @dataclasses.dataclass
 class BracketFormat(SongFormat):
-    name = "default"
+    name = "bracket"
+    other_names = ("text",)
     can_read = True
     can_write = True
+    can_merge = False
+    can_split = False
 
     # todo initialize this with config-level options
     default_heading_marker: str = " - "

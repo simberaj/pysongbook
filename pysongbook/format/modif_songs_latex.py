@@ -3,6 +3,7 @@ from collections.abc import Callable, Generator
 import dataclasses
 import logging
 import re
+from pathlib import Path
 from typing import ClassVar, cast
 
 from pysongbook.format.chord import ChordParser, TextChordParser
@@ -279,8 +280,11 @@ class ChordTabAnnotationParser(LaTeXAnnotationCommandParser):
 @dataclasses.dataclass
 class ModifiedSongsLaTeXFormat(SongFormat):
     name: ClassVar[str] = "latex-songs-modif"
+    other_names = ("msl",)
     can_read: ClassVar[bool] = True
     can_write: ClassVar[bool] = True
+    can_merge: ClassVar[bool] = True
+    can_split: ClassVar[bool] = False
 
     beginsong_pattern: re.Pattern[str] = re.compile(r"\s*\\beginsong\{(?P<title>[^}]+?)}(?:\[(?P<annots>[^]]+?)])?")
     beginsong_annot_pattern: re.Pattern[str] = re.compile(r"(?P<key>[a-z]+)=\{(?P<value>[^}]*?)}")
@@ -407,13 +411,19 @@ class ModifiedSongsLaTeXFormat(SongFormat):
         self.command_parsers_by_name: dict[str, LaTeXSegmentCommandParser | LaTeXAnnotationCommandParser] = {
             cmd.command_name: cmd for cmd in (*self.segment_command_parsers, *self.annotation_command_parsers)
         }
+        self._standalone_init_text = None
 
     def loads(self, song_text: str) -> Song:
         annotations, remnant = self._parse_beginsong(song_text)
         strophe_strs = self.strophe_split_pattern.split(remnant)
         if len(strophe_strs) < 2:
             raise SongParseError("no strophes found")
-        annotations.extend(self._parse_annotations(strophe_strs[0].strip()))
+        # Ignore \chordsoff at the beginning of the song: it is always produced there by default to have strophes
+        # non-chorded by default and ease strophe spacing a bit. Individual strophes opt in by \chordson at their
+        # beginning.
+        annotations.extend(
+            a for a in self._parse_annotations(strophe_strs[0].strip()) if not isinstance(a, TurnChordsOff)
+        )
         items: list[Annotation | Strophe] = []
         num = 1
         chords_on = True
@@ -961,9 +971,21 @@ class ModifiedSongsLaTeXFormat(SongFormat):
                 quoted_text += f"\\uv{{{part}}}"
         return quoted_text
 
+    def merge(self, song_texts: list[str]) -> str:
+        return "\n\n".join(song_texts)
+
+    @property
+    def standalone_init_text(self):
+        if self._standalone_init_text is None:
+            with open(Path(__file__).parent / "modif_songs_latex_init.tex", "r", encoding="utf8") as f:
+                self._standalone_init_text = f.read()
+        return self._standalone_init_text
+
+    def make_standalone(self, song_text: str) -> str:
+        return self.standalone_init_text + song_text + "\n\n\\end{songs}\n\\end{document}"
+
 
 if __name__ == "__main__":
-    from pathlib import Path
     import pprint
 
     chords_path = Path(__file__).parent.parent / "test" / "data"

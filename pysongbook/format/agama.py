@@ -6,6 +6,7 @@ from pysongbook.model import ChordedSegment, Song, Strophe, StropheSegment
 
 class AgamaFormat(BracketFormat):
     name: str = "agama"
+    other_names = ("twoline",)
     empty_line_pattern: re.Pattern[str] = re.compile(r"\n\s*\n")
     empty_startline_pattern: re.Pattern[str] = re.compile(r"^\s*\n")
 

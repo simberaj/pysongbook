@@ -1,9 +1,11 @@
+import locale
 from pathlib import Path
 import warnings
 
 import pytest
 
 from pysongbook.format.chord import TextChordParser
+from pysongbook.format.core import ModelDictFormat
 from pysongbook.format.modif_songs_latex import ModifiedSongsLatexChordParser, ModifiedSongsLaTeXFormat
 from pysongbook.modify import NORMALIZER
 
@@ -29,9 +31,11 @@ def expected_output_texs() -> dict[str, str]:
 
 def test_modif_songs_latex_parser(input_texs: dict[str, str], expected_output_texs: dict[str, str]):
     format = ModifiedSongsLaTeXFormat()
+    dump_format = ModelDictFormat()
     for name, text in input_texs.items():
         song = NORMALIZER.modify(format.loads(text))
         result = format.dumps(song, chords=True)
+        dump_format.dumps(song)
         if name in expected_output_texs:
             assert result.strip() == expected_output_texs[name].strip()
 
