@@ -5,7 +5,7 @@ import pytest
 
 from pysongbook.format.chord import TextChordParser
 from pysongbook.format.modif_songs_latex import ModifiedSongsLatexChordParser, ModifiedSongsLatexFormat
-from pysongbook.modifier import NORMALIZER
+from pysongbook.modify import NORMALIZER
 
 
 # inputs_path = Path(__file__).parent / "data"

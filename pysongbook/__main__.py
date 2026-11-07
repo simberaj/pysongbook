@@ -7,7 +7,7 @@ from pysongbook.format.bracket import BracketFormat
 from pysongbook.format.core import ModelDictFormat
 from pysongbook.format.modif_songs_latex import ModifiedSongsLatexFormat
 from pysongbook.input import get_inputs, parse_inputs
-from pysongbook.modifier import NORMALIZER
+from pysongbook.modify import NORMALIZER
 
 
 FORMATS = [BracketFormat, AgamaFormat, ModifiedSongsLatexFormat]

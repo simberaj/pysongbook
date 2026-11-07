@@ -57,7 +57,7 @@ from pysongbook.model import (
     UnchordedSegment,
     UnknownChordSegment,
 )
-from pysongbook.modifier import NORMALIZER
+from pysongbook.modify import NORMALIZER
 
 
 @dataclasses.dataclass
