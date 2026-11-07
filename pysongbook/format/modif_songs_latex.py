@@ -1,7 +1,6 @@
 import abc
 from collections.abc import Callable, Generator
 import dataclasses
-import functools
 import logging
 import re
 from typing import ClassVar, cast
@@ -66,6 +65,7 @@ class ModifiedSongsLatexChordParser(ChordParser):
     substitutions: list[tuple[re.Pattern, str | Callable[[re.Match], str]]] = dataclasses.field(
         default_factory=lambda: [
             (re.compile(r"\\shrp(\{})?"), "#"),
+            (re.compile(r"\\flt(\{})?"), "b"),
             (re.compile(r"\\hidx\{([^}\]]+)}"), lambda m: m.group(1)),
             (re.compile(r"\\didx\{([^}\]]+)}"), lambda m: m.group(1)),
         ]
@@ -93,7 +93,9 @@ class SimpleCommandParser(LaTeXSegmentCommandParser):
     command_name: str
     result: list[StropheSegment | ProcessingInstruction]
 
-    def parse(self, segs: list[StropheSegment | ProcessingInstruction]) -> list[StropheSegment | ProcessingInstruction]:
+    def parse(
+        self, segs: list[StropheSegment | ProcessingInstruction] | None = None
+    ) -> list[StropheSegment | ProcessingInstruction]:
         if segs:
             logging.warning(f"Skipping inner content for empty-content command {self.command_name}: {segs!r}")
         return self.result
@@ -147,8 +149,10 @@ class FixedStropheMarkRepetitionCommandParser(BaseStropheRepetitionCommandParser
     command_name: str
     mark: StropheMark
 
-    def parse(self, segs: list[StropheSegment | ProcessingInstruction]) -> list[StropheSegment | ProcessingInstruction]:
-        return self._parse(segs, self.mark)
+    def parse(
+        self, modif_segs: list[StropheSegment | ProcessingInstruction]
+    ) -> list[StropheSegment | ProcessingInstruction]:
+        return self._parse(modif_segs, self.mark)
 
 
 class StropheRepetitionCommandParser(BaseStropheRepetitionCommandParser):
@@ -157,23 +161,21 @@ class StropheRepetitionCommandParser(BaseStropheRepetitionCommandParser):
 
     def parse(
         self,
-        segs: list[StropheSegment | ProcessingInstruction],
         mark_segs: list[StropheSegment | ProcessingInstruction],
+        modif_segs: list[StropheSegment | ProcessingInstruction],
     ) -> list[StropheSegment | ProcessingInstruction]:
-        mark = self._parse_strophe_mark(mark_segs)
-        return self._parse(segs, mark)
+        return self._parse(modif_segs, self._parse_strophe_mark(mark_segs))
 
-    @staticmethod
-    def _parse_strophe_mark(mark_segs: list[StropheSegment | ProcessingInstruction]) -> StropheMark:
+    def _parse_strophe_mark(self, mark_segs: list[StropheSegment | ProcessingInstruction]) -> StropheMark:
         if len(mark_segs) != 1:
-            raise ValueError(f"invalid repsec marker: {mark_segs!r}")
+            raise ValueError(f"invalid strophe mark segments: {mark_segs!r}")
         marker = mark_segs[0]
         if isinstance(marker, EmbeddedStropheMark):
             return marker.mark
         elif isinstance(marker, ChordlessSegment) and marker.text.strip().isdigit():
             return NumberedStropheMark(int(marker.text.strip()))
         else:
-            raise ValueError(f"invalid repsec marker: {marker!r}")
+            raise ValueError(f"invalid strophe marker: {marker!r}")
 
 
 @dataclasses.dataclass
@@ -186,7 +188,6 @@ class FixedEmbeddedAnnotationCommandParser(LaTeXSegmentCommandParser):
         return [EmbeddedAnnotation(self.annotation)]
 
 
-@dataclasses.dataclass
 class LaTeXAnnotationCommandParser(abc.ABC):
     command_name: str
     arg_setting: ClassVar[CommandArgSetting] = CommandArgSetting(min_args=1, max_args=1, raw_args=(0,))
@@ -286,20 +287,20 @@ class ModifiedSongsLaTeXFormat(SongFormat):
     beginsong_annot_keys: dict[str, type[Annotation]] = dataclasses.field(
         default_factory=lambda: {"by": AuthorAnnotation}
     )
-    simple_beginverse_commands: dict[str, type[StropheMark] | functools.partial[StropheMark]] = dataclasses.field(
+    simple_beginverse_commands: dict[str, StropheMark] = dataclasses.field(
         default_factory=lambda: {
-            "emptyv": EmptyStropheMark,
-            "freev": EmptyStropheMark,
-            "chor": ChorusMark,
-            "intro": IntroMark,
-            "solo": SoloMark,
-            "bridge": BridgeMark,
+            "emptyv": EmptyStropheMark(),
+            "freev": EmptyStropheMark(),
+            "chor": ChorusMark(),
+            "intro": IntroMark(),
+            "solo": SoloMark(),
+            "bridge": BridgeMark(),
             "chorusi": NumberedChorusMark(number=1),
             "chorusii": NumberedChorusMark(number=2),
             "averse": LetteredStropheMark(letter="A"),
             "bverse": LetteredStropheMark(letter="B"),
             "cverse": LetteredStropheMark(letter="C"),
-            "recite": RecitationMark,
+            "recite": RecitationMark(),
         }
     )
     numbered_beginverse_command: str = "num"
@@ -392,11 +393,10 @@ class ModifiedSongsLaTeXFormat(SongFormat):
             self.segment_command_parsers.append(
                 SimpleCommandParser(command_name=command, result=[EmbeddedStropheMark(mark)])
             )
-        self.simple_beginverse_command_names = {v(): k for k, v in self.simple_beginverse_commands.items()}
+        self.simple_beginverse_command_names = {v: k for k, v in self.simple_beginverse_commands.items()}
         self.simple_beginverse_command_names[CodaMark()] = "cverse"
         self.beginverse_commands = [self.numbered_beginverse_command, *self.simple_beginverse_commands.keys()]
         self.strophe_split_pattern = re.compile(r"\\(?=(?:" + "|".join(self.beginverse_commands) + r")\b)")
-        self.text_dump_repls |= {v: k for k, v in self.text_load_repls.items()}
         self.endverse_pattern: re.Pattern[str] = re.compile(r"\\(?:" + "|".join(self.endverse_commands) + r")\b")
         self.segment_command_parsers.extend(
             [
@@ -534,7 +534,7 @@ class ModifiedSongsLaTeXFormat(SongFormat):
         if mark_str == self.numbered_beginverse_command:
             return NumberedStropheMark(num)
         elif mark_str in self.simple_beginverse_commands:
-            return self.simple_beginverse_commands[mark_str]()
+            return self.simple_beginverse_commands[mark_str]
         else:
             raise SongParseError(f"unknown strophe mark command: {mark_str!r}")
 
@@ -977,14 +977,14 @@ if __name__ == "__main__":
             result = in_out_format.dumps(song, chords=True)
             print(result)  # noqa: T201
 
-    # # ahoj_slunko_path = Path(__file__).parent.parent / "test" / "data" / "ahoj_slunko.txt"
+    # # ahoj_slunko_path = Path(__file__).parent.parent / "test" / "data" / "Ahoj slunko - Jaromír Nohavica.txt"
     # # with ahoj_slunko_path.open(encoding="utf8") as f:
     # #     song = DefaultFormat().loads(f.read())
     # # pprint.pprint(song)
     # # print(DefaultFormat().dumps(song))
     # # print(AgamaFormat().dumps(song))
-    # # ahoj_slunko_path = Path(__file__).parent.parent / "test" / "data" / "1plus1.tex"
-    # ahoj_slunko_path = Path(__file__).parent.parent / "test" / "data" / "ahoj_slunko.tex"
+    # # ahoj_slunko_path = Path(__file__).parent.parent / "test" / "data" / "1+1 - Ready Kirken.tex"
+    # ahoj_slunko_path = Path(__file__).parent.parent / "test" / "data" / "Ahoj slunko - Jaromír Nohavica.tex"
     # with ahoj_slunko_path.open(encoding="utf8") as f:
     #     test_song = ModifiedSongsLatexFormat().loads(f.read())
     # pprint.pprint(test_song)

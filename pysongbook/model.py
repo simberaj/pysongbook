@@ -103,12 +103,22 @@ class MajorSeventh(ChordModifier):
 
 
 @dataclasses.dataclass
+class HigherNote(ChordModifier):
+    factor: int
+    level: ClassVar[int] = 1
+    allowed_factors: ClassVar[list[int]] = [6, 9, 11, 13]
+
+    def to_string(self) -> str:
+        return str(self.factor)
+
+
+@dataclasses.dataclass
 class AddedNote(ChordModifier):
     factor: int
     level: ClassVar[int] = 1
 
     def to_string(self) -> str:
-        return str(self.factor)
+        return f"add{self.factor}"
 
 
 @dataclasses.dataclass

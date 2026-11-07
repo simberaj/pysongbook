@@ -15,6 +15,7 @@ from pysongbook.model import (
     ChordModifier,
     DominantSeventh,
     GenericChordModifier,
+    HigherNote,
     MajorSeventh,
     Minor,
     Note,
@@ -45,22 +46,29 @@ class DynamicTextChordModifierParseRule(abc.ABC):
         raise NotImplementedError
 
 
+class HigherNoteParseRule(DynamicTextChordModifierParseRule):
+    pattern: re.Pattern[str] = re.compile("|".join(str(x) for x in HigherNote.allowed_factors))
+
+    def parse(self, match: re.Match) -> HigherNote:
+        return HigherNote(int(match.group()))
+
+
 class AddedNoteParseRule(DynamicTextChordModifierParseRule):
-    pattern: re.Pattern[str] = re.compile(r"\+(\d)")
+    pattern: re.Pattern[str] = re.compile(r"(?:\+|add)(\d+)")
 
     def parse(self, match: re.Match) -> AddedNote:
-        return AddedNote(int(match.group()))
+        return AddedNote(int(match.group(1)))
 
 
 class SuspendedParseRule(DynamicTextChordModifierParseRule):
-    pattern: re.Pattern[str] = re.compile(r"sus(\d)")
+    pattern: re.Pattern[str] = re.compile(r"sus(\d+)")
 
     def parse(self, match: re.Match) -> Suspended:
         return Suspended(int(match.group(1)))
 
 
 class AlteredParseRule(DynamicTextChordModifierParseRule):
-    pattern: re.Pattern[str] = re.compile(r"(\+|dim)(\d)?")
+    pattern: re.Pattern[str] = re.compile(r"(\+|dim|b)(\d*)")
 
     def parse(self, match: re.Match) -> Altered:
         return Altered(direction=match.group(1), factor=(5 if not match.group(2) else int(match.group(2))))
@@ -79,27 +87,27 @@ class BassNoteParseRule(DynamicTextChordModifierParseRule):
 @dataclasses.dataclass
 class TextChordParser:
     tone_pattern: re.Pattern[str] = re.compile(DEFAULT_TONE_PATTERN_STR)
-    modifier_parse_rules: list[SimpleTextChordModifierParseRule | DynamicTextChordModifierParseRule] = (
-        dataclasses.field(
-            default_factory=lambda: [
-                SimpleTextChordModifierParseRule(re.compile(r"maj7?"), MajorSeventh),
-                SimpleTextChordModifierParseRule(re.compile(r"m"), Minor),
-                SimpleTextChordModifierParseRule(re.compile(r"7"), DominantSeventh),
-                AddedNoteParseRule(),
-                SuspendedParseRule(),
-                AlteredParseRule(),
-                BassNoteParseRule(),
-            ]
-        )
+    modifier_parse_rules: tuple[SimpleTextChordModifierParseRule | DynamicTextChordModifierParseRule, ...] = (
+        SimpleTextChordModifierParseRule(re.compile(r"maj7?"), MajorSeventh),
+        SimpleTextChordModifierParseRule(re.compile(r"m"), Minor),
+        SimpleTextChordModifierParseRule(re.compile(r"7"), DominantSeventh),
+        HigherNoteParseRule(),
+        AddedNoteParseRule(),
+        SuspendedParseRule(),
+        AlteredParseRule(),
+        BassNoteParseRule(),
     )
 
     def parse(self, chord_str: str) -> Chord:
         if not chord_str:
             raise SongParseError("empty chord")
         root = self.tone_pattern.match(chord_str)
-        if root is None or root not in NOTES:
+        if root is None or root.group() not in NOTES:
             raise SongParseError(f"invalid chord major: {chord_str}")
         modifiers = list(self.parse_modifiers(chord_str[root.end() :]))
+        for modif in modifiers:
+            if isinstance(modif, GenericChordModifier):
+                logging.warning(f"unknown chord modifier: {modif.string} in chord {chord_str}")
         return Chord(cast(Note, root.group()), modifiers=modifiers)
 
     def parse_modifiers(self, modif_str: str) -> Generator[ChordModifier, None, None]:
@@ -113,6 +121,5 @@ class TextChordParser:
                     modif_str = modif_str[len(match.group()) :]
                     break
             else:
-                logging.warning(f"unknown chord modifier: {modif_str!r}")
                 yield GenericChordModifier(modif_str)
                 return
