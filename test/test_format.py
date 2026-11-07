@@ -5,6 +5,7 @@ import pytest
 
 from pysongbook.format.chord import TextChordParser
 from pysongbook.format.modif_songs_latex import ModifiedSongsLatexChordParser, ModifiedSongsLatexFormat
+from pysongbook.modifier import NORMALIZER
 
 
 # inputs_path = Path(__file__).parent / "data"
@@ -29,7 +30,7 @@ def expected_output_texs() -> dict[str, str]:
 def test_modif_songs_latex_parser(input_texs: dict[str, str], expected_output_texs: dict[str, str]):
     format = ModifiedSongsLatexFormat()
     for name, text in input_texs.items():
-        song = format.loads(text).normalized()
+        song = NORMALIZER.modify(format.loads(text))
         result = format.dumps(song, chords=True)
         if name in expected_output_texs:
             assert result.strip() == expected_output_texs[name].strip()

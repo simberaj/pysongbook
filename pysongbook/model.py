@@ -1,12 +1,9 @@
 import abc
 from abc import ABC
-import collections
-import copy
 import dataclasses
 from functools import cached_property
-import itertools
 import typing
-from typing import ClassVar, Literal, Self, TypeAlias, TypeVar, cast
+from typing import ClassVar, Literal, Self, TypeAlias, TypeVar
 
 
 # TODO CZ/EN note convention
@@ -532,110 +529,3 @@ class Song:
             for annot in self.annotations
             if not isinstance(annot, tuple(exclude_types)) and (chords or not annot.is_chord_annotation)
         ]
-
-    def normalized(self) -> "Song":
-        dup_items = copy.deepcopy(self.items)
-        linked = self._link_strophe_repeats(dup_items)
-        return Song(
-            annotations=copy.deepcopy(self.annotations),
-            items=self._fill_initial_unknown_chord_segments(
-                self._recognize_codas(self._infer_chorus_repetition(linked))
-            ),
-        )
-
-    @classmethod
-    def _link_strophe_repeats(cls, items: list[Strophe | Annotation]) -> list[Strophe | Annotation]:
-        linked_items = []
-        for i, item in enumerate(items):
-            if isinstance(item, RepeatStropheWithSameMark):
-                # Find the strophe to repeat.
-                for link_item in reversed(list(items[:i])):
-                    if (
-                        isinstance(link_item, Strophe)
-                        and not isinstance(link_item, RepeatStropheWithSameMark)
-                        and link_item.mark == item.mark
-                    ):
-                        break
-                else:
-                    raise ValueError(f"cannot find strophe of mark {item.mark} to repeat")
-                if item.segments:
-                    # This is a repeat of the strophe, but modified. Inferring the exact form of the strophe is not
-                    # meaningfully possible, except for the reader. Preserving the info.
-                    # for seg in item.segments:
-                    #     if isinstance(seg, StropheSegment):
-                    #         first_segment_text = seg.text
-                    #         break
-                    # else:
-                    #     first_segment_text = str(uuid.uuid4())  # something that will never appear
-                    # for i, lseg in enumerate(link_item.segments):
-                    #     if isinstance(lseg, StropheSegment) and first_segment_text in lseg.text:
-                    #         break
-                    # break_segment = dataclasses.replace(lseg, text=lseg.text[: lseg.text.find(first_segment_text)])
-                    # result_segments = [
-                    #     RepeatedStrophePart(link_item.segments[:i] + [break_segment])
-                    # ] + cls._ffill_chord(item.segments, break_segment)
-                    result_item = ModifiedStropheRepeat(repeated_strophe=link_item, segments=item.segments)
-                else:
-                    result_item = SimpleStropheRepeat(repeated_strophe=link_item)
-                linked_items.append(result_item)
-            else:
-                linked_items.append(item)
-        return linked_items
-
-    @classmethod
-    def _ffill_chord(cls, segments: list[StropheSegment], source_segment: StropheSegment) -> list[StropheSegment]:
-        if not hasattr(source_segment, "chord"):
-            return segments
-        out_segments = []
-        for seg in segments:
-            if hasattr(seg, "chord"):
-                break
-            elif isinstance(seg, StropheSegment):
-                out_segments.append(ChordedSegment(chord=source_segment.chord, text=seg.text))
-            else:
-                out_segments.append(seg)
-        return out_segments + segments[len(out_segments) :]
-
-    @staticmethod
-    def _infer_chorus_repetition(items: list[Strophe | Annotation]) -> list[Strophe | Annotation]:
-        strophe_types = [type(item.mark) for item in items if isinstance(item, Strophe)]
-        if len(strophe_types) <= 2 or len(strophe_types) < len(items):
-            return items
-        type_pattern = [NumberedStropheMark, ChorusMark] + [NumberedStropheMark] * (len(strophe_types) - 2)
-        if strophe_types == type_pattern:
-            # Inlay chorus repetition after the second and each subsequent strophe.
-            repeat_chorus = SimpleStropheRepeat(cast(Strophe, items[1]))
-            inlaid = items[:2] + [item for strophe in items[2:] for item in (strophe, repeat_chorus)]
-            return inlaid
-        return items
-
-    @staticmethod
-    def _fill_initial_unknown_chord_segments(items: list[Strophe | Annotation]) -> list[Strophe | Annotation]:
-        replacements = []
-        strophes: list[tuple[int, Strophe]] = [(i, item) for i, item in enumerate(items) if isinstance(item, Strophe)]
-        for prev, current in itertools.pairwise(strophes):
-            prev_i, prev_strophe = prev
-            cur_i, cur_strophe = current
-            can_replace = (
-                cur_strophe.segments
-                and isinstance(cur_strophe.segments[0], UnknownChordSegment)
-                and any(isinstance(seg, ChordedSegment) for seg in cur_strophe.segments)
-                and prev_strophe.segments
-                and isinstance(prev_strophe.segments[-1], ChordedSegment)
-            )
-            if can_replace:
-                replacements.append(
-                    (cur_i, ChordedSegment(chord=prev_strophe.segments[-1].chord, text=cur_strophe.segments[0].text))
-                )
-        for item_i, repl in replacements:
-            items[item_i].segments[0] = repl
-        return items
-
-    @staticmethod
-    def _recognize_codas(items: list[Strophe | Annotation]) -> list[Strophe | Annotation]:
-        marks = [(i, item.mark) for i, item in enumerate(items) if isinstance(item, Strophe)]
-        letter_counts = collections.Counter(mark.letter for i, mark in marks if isinstance(mark, LetteredStropheMark))
-        if letter_counts == {"C": 1} and marks[-1][1] == LetteredStropheMark("C"):
-            items[marks[-1][0]].mark = CodaMark()
-            return items
-        return items

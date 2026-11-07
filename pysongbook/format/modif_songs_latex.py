@@ -57,6 +57,7 @@ from pysongbook.model import (
     UnchordedSegment,
     UnknownChordSegment,
 )
+from pysongbook.modifier import NORMALIZER
 
 
 @dataclasses.dataclass
@@ -834,7 +835,7 @@ if __name__ == "__main__":
         if path.suffix == ".tex" and "berousek" in str(path):
             text = path.open(encoding="utf8").read()
             print(text)  # noqa: T201
-            song = in_out_format.loads(text).normalized()
+            song = NORMALIZER.modify(in_out_format.loads(text))
             pprint.pprint(song)  # noqa: T203
             result = in_out_format.dumps(song, chords=True)
             print(result)  # noqa: T201

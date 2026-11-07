@@ -7,6 +7,7 @@ from pysongbook.format.bracket import BracketFormat
 from pysongbook.format.core import ModelDictFormat
 from pysongbook.format.modif_songs_latex import ModifiedSongsLatexFormat
 from pysongbook.input import get_inputs, parse_inputs
+from pysongbook.modifier import NORMALIZER
 
 
 FORMATS = [BracketFormat, AgamaFormat, ModifiedSongsLatexFormat]
@@ -37,7 +38,7 @@ if __name__ == "__main__":
     parsed = parse_inputs(all_inputs, parser_format)
     if not args.no_normalize:
         logging.info("Normalizing song representations")
-        normalized = [song.normalized() for song in parsed]
+        normalized = [NORMALIZER.modify(song) for song in parsed]
     else:
         normalized = parsed
     # TODO proper output, including merging
