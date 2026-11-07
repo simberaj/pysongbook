@@ -4,11 +4,15 @@ import collections
 import copy
 import dataclasses
 from functools import cached_property
+import itertools
+import typing
 from typing import ClassVar, Literal, Self, TypeAlias, TypeVar, cast
 
 
 # TODO CZ/EN note convention
-Note = Literal["C", "C#", "Db", "D", "D#", "Eb", "E", "F", "F#", "Fb", "G", "G#", "Gb", "A", "A#", "Ab", "B", "H"]
+StringPositions: TypeAlias = tuple[int | None, int | None, int | None, int | None, int | None, int | None]
+Note = Literal["C", "C#", "Db", "D", "D#", "Eb", "E", "F", "F#", "Fb", "G", "G#", "Gb", "A", "A#", "Ab", "B", "Bb", "H"]
+NOTES = typing.get_args(Note)
 
 
 class MalformedSongError(ValueError):
@@ -250,7 +254,7 @@ class NumberedStropheMark(StropheMark):
     def from_string(cls, mark: str) -> "NumberedStropheMark":
         return cls(int(mark))
 
-    def to_string(self, short: bool) -> str:
+    def to_string(self, short: bool) -> str:  # noqa: ARG002 # short and long form the same
         return str(self.number)
 
 
@@ -265,7 +269,7 @@ class LetteredStropheMark(StropheMark):
             raise ValueError("invalid lettered strophe mark")
         return cls(mark)
 
-    def to_string(self, short: bool) -> str:
+    def to_string(self, short: bool) -> str:  # noqa: ARG002 # short and long form the same
         return self.letter
 
 
@@ -285,7 +289,7 @@ class NumberedChorusMark(StropheMark):
 @dataclasses.dataclass(eq=True, frozen=True)  # makes all instances of the same class equal (no attrs)
 class InvariantStropheMark(StropheMark):
     @classmethod
-    def from_string(cls, mark: str) -> "InvariantStropheMark":
+    def from_string(cls, mark: str) -> "InvariantStropheMark":  # noqa: ARG003 # class defines the mark
         return cls()
 
     @abc.abstractmethod
@@ -303,7 +307,7 @@ class ChorusMark(InvariantStropheMark):
 class IntroMark(InvariantStropheMark):
     is_chorus: ClassVar[bool] = False
 
-    def to_string(self, short: bool) -> str:
+    def to_string(self, short: bool) -> str:  # noqa: ARG002 # short and long form the same
         return "Intro"
 
 
@@ -317,7 +321,7 @@ class BridgeMark(InvariantStropheMark):
 class SoloMark(InvariantStropheMark):
     is_chorus: ClassVar[bool] = False
 
-    def to_string(self, short: bool) -> str:
+    def to_string(self, short: bool) -> str:  # noqa: ARG002 # short and long form the same
         return "Solo"
 
 
@@ -325,7 +329,7 @@ class RecitationMark(InvariantStropheMark):
     is_chorus: ClassVar[bool] = False
 
     def to_string(self, short: bool) -> str:
-        return "Rec"
+        return "Rec" if short else "Recitation"
 
 
 class CodaMark(InvariantStropheMark):
@@ -338,7 +342,7 @@ class CodaMark(InvariantStropheMark):
 class EmptyStropheMark(InvariantStropheMark):
     is_chorus: ClassVar[bool] = False
 
-    def to_string(self, short: bool) -> str:
+    def to_string(self, short: bool) -> str:  # noqa: ARG002 # short and long form the same
         return ""
 
 
@@ -545,7 +549,7 @@ class Song:
         for i, item in enumerate(items):
             if isinstance(item, RepeatStropheWithSameMark):
                 # Find the strophe to repeat.
-                for j, link_item in reversed(list(enumerate(items[:i]))):
+                for link_item in reversed(list(items[:i])):
                     if (
                         isinstance(link_item, Strophe)
                         and not isinstance(link_item, RepeatStropheWithSameMark)
@@ -609,7 +613,7 @@ class Song:
     def _fill_initial_unknown_chord_segments(items: list[Strophe | Annotation]) -> list[Strophe | Annotation]:
         replacements = []
         strophes: list[tuple[int, Strophe]] = [(i, item) for i, item in enumerate(items) if isinstance(item, Strophe)]
-        for prev, current in zip(strophes[:-1], strophes[1:], strict=False):
+        for prev, current in itertools.pairwise(strophes):
             prev_i, prev_strophe = prev
             cur_i, cur_strophe = current
             can_replace = (
@@ -635,6 +639,3 @@ class Song:
             items[marks[-1][0]].mark = CodaMark()
             return items
         return items
-
-
-StringPositions: TypeAlias = tuple[int | None, int | None, int | None, int | None, int | None, int | None]

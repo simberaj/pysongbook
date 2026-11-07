@@ -3,7 +3,7 @@ import warnings
 
 import pytest
 
-from pysongbook.format import DefaultChordParser, ModifiedSongsLatexChordParser, ModifiedSongsLatexFormat
+from pysongbook.format import ModifiedSongsLatexChordParser, ModifiedSongsLatexFormat, TextChordParser
 
 
 # inputs_path = Path(__file__).parent / "data"
@@ -46,7 +46,7 @@ def test_modif_songs_latex_parser(input_texs: dict[str, str], expected_output_te
     ],
 )
 def test_modif_songs_latex_chord_parser(latex: str, normal: str):
-    assert ModifiedSongsLatexChordParser().parse(latex) == DefaultChordParser().parse(normal)
+    assert ModifiedSongsLatexChordParser().parse(latex) == TextChordParser().parse(normal)
 
 
 def test_modif_songs_latex_chord_parser_infloop():

@@ -1,13 +1,16 @@
 import abc
 from abc import ABC
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Mapping
 import dataclasses
 import functools
 import json
+import logging
 import re
-import warnings
+from types import MappingProxyType
+from typing import ClassVar, cast
 
 from pysongbook.model import (
+    NOTES,
     AddedNote,
     Altered,
     Annotation,
@@ -30,6 +33,7 @@ from pysongbook.model import (
     LetteredStropheMark,
     MajorSeventh,
     Minor,
+    Note,
     NoteAnnotation,
     NumberedChorusMark,
     NumberedStropheMark,
@@ -58,10 +62,6 @@ class SongParseError(ValueError):
     pass
 
 
-class SongParseWarning(UserWarning):
-    pass
-
-
 class PositionalSongParseError(ValueError):
     def __init__(self, issue: str, text: str, pos: int):
         self.issue = issue
@@ -76,7 +76,7 @@ class SongSerializationWarning(UserWarning):
 class ProcessingInstruction(Annotation):
     is_chord_annotation = False
 
-    def to_string(self, delimiter: str) -> str:
+    def to_string(self, delimiter: str) -> str:  # noqa: ARG002  # interface compatibility
         raise ValueError(f"cannot serialize processing instruction {self}")
 
 
@@ -102,8 +102,7 @@ class SongFormat(ABC):
     def can_write(self) -> bool: ...
 
 
-def _parse_altered_modifier_match(match: re.Match) -> Altered:
-    return Altered(direction=match.group(1), factor=(5 if not match.group(2) else int(match.group(2))))
+DEFAULT_TONE_PATTERN_STR: str = r"[A-H](?:#|b)?"
 
 
 class ChordParser(abc.ABC):
@@ -112,50 +111,103 @@ class ChordParser(abc.ABC):
         raise NotImplementedError
 
 
-class DefaultChordParser:
-    tone_pattern_str = r"[A-H](?:#|b)?"
-    tone_pattern = re.compile(tone_pattern_str)
-    modifier_patterns: tuple[re.Pattern, Callable[..., ChordModifier], bool] = [
-        (re.compile(r"maj7?"), MajorSeventh, False),
-        (re.compile(r"m"), Minor, False),
-        (re.compile(r"7"), DominantSeventh, False),
-        (re.compile(r"\d+"), (lambda match: AddedNote(int(match.group()))), True),
-        (re.compile(r"sus(\d)"), (lambda match: Suspended(int(match.group(1)))), True),
-        (re.compile(r"(\+|dim)(\d)?"), _parse_altered_modifier_match, True),
-        (re.compile(r"/" + tone_pattern_str), (lambda match: BassNote(match.group()[1:])), True),
-    ]
+@dataclasses.dataclass
+class SimpleTextChordModifierParseRule:
+    pattern: re.Pattern[str]
+    result_type: type[ChordModifier]
+
+
+class DynamicTextChordModifierParseRule(abc.ABC):
+    pattern: re.Pattern[str]
+
+    @abc.abstractmethod
+    def parse(self, match: re.Match) -> ChordModifier:
+        raise NotImplementedError
+
+
+class AddedNoteParseRule(DynamicTextChordModifierParseRule):
+    pattern: re.Pattern[str] = re.compile(r"\+(\d)")
+
+    def parse(self, match: re.Match) -> AddedNote:
+        return AddedNote(int(match.group()))
+
+
+class SuspendedParseRule(DynamicTextChordModifierParseRule):
+    pattern: re.Pattern[str] = re.compile(r"sus(\d)")
+
+    def parse(self, match: re.Match) -> Suspended:
+        return Suspended(int(match.group(1)))
+
+
+class AlteredParseRule(DynamicTextChordModifierParseRule):
+    pattern: re.Pattern[str] = re.compile(r"(\+|dim)(\d)?")
+
+    def parse(self, match: re.Match) -> Altered:
+        return Altered(direction=match.group(1), factor=(5 if not match.group(2) else int(match.group(2))))
+
+
+class BassNoteParseRule(DynamicTextChordModifierParseRule):
+    pattern: re.Pattern[str] = re.compile(r"/" + DEFAULT_TONE_PATTERN_STR)
+
+    def parse(self, match: re.Match) -> BassNote:
+        bass_tone = match.group()[1:]
+        if bass_tone not in NOTES:
+            raise SongParseError(f"invalid bass note: {bass_tone}")
+        return BassNote(cast(Note, bass_tone))
+
+
+@dataclasses.dataclass
+class TextChordParser:
+    tone_pattern: re.Pattern[str] = re.compile(DEFAULT_TONE_PATTERN_STR)
+    modifier_parse_rules: list[SimpleTextChordModifierParseRule | DynamicTextChordModifierParseRule] = (
+        dataclasses.field(
+            default_factory=lambda: [
+                SimpleTextChordModifierParseRule(re.compile(r"maj7?"), MajorSeventh),
+                SimpleTextChordModifierParseRule(re.compile(r"m"), Minor),
+                SimpleTextChordModifierParseRule(re.compile(r"7"), DominantSeventh),
+                AddedNoteParseRule(),
+                SuspendedParseRule(),
+                AlteredParseRule(),
+                BassNoteParseRule(),
+            ]
+        )
+    )
 
     def parse(self, chord_str: str) -> Chord:
         if not chord_str:
             raise SongParseError("empty chord")
         root = self.tone_pattern.match(chord_str)
-        if root is None:
+        if root is None or root not in NOTES:
             raise SongParseError(f"invalid chord major: {chord_str}")
         modifiers = list(self.parse_modifiers(chord_str[root.end() :]))
-        return Chord(root.group(), modifiers=modifiers)
+        return Chord(cast(Note, root.group()), modifiers=modifiers)
 
     def parse_modifiers(self, modif_str: str) -> Generator[ChordModifier, None, None]:
         while modif_str:
-            for pattern, converter, pass_match in self.modifier_patterns:
-                match = pattern.match(modif_str)
+            for rule in self.modifier_parse_rules:
+                match = rule.pattern.match(modif_str)
                 if match is not None:
-                    yield converter(match) if pass_match else converter()
+                    yield (
+                        rule.result_type() if isinstance(rule, SimpleTextChordModifierParseRule) else rule.parse(match)
+                    )
                     modif_str = modif_str[len(match.group()) :]
                     break
             else:
+                logging.warning(f"unknown chord modifier: {modif_str!r}")
                 yield GenericChordModifier(modif_str)
                 return
 
 
+@dataclasses.dataclass
 class ModifiedSongsLatexChordParser(ChordParser):
-    substitutions: list[tuple[re.Pattern, str | Callable[[re.Match], str]]] = [
-        (re.compile(r"\\shrp(\{})?"), "#"),
-        (re.compile(r"\\hidx\{([^}\]]+)}"), lambda m: m.group(1)),
-        (re.compile(r"\\didx\{([^}\]]+)}"), lambda m: m.group(1)),
-    ]
-
-    def __init__(self):
-        self.inner = DefaultChordParser()
+    inner: ChordParser = dataclasses.field(default_factory=TextChordParser)
+    substitutions: list[tuple[re.Pattern, str | Callable[[re.Match], str]]] = dataclasses.field(
+        default_factory=lambda: [
+            (re.compile(r"\\shrp(\{})?"), "#"),
+            (re.compile(r"\\hidx\{([^}\]]+)}"), lambda m: m.group(1)),
+            (re.compile(r"\\didx\{([^}\]]+)}"), lambda m: m.group(1)),
+        ]
+    )
 
     def parse(self, chord_str: str) -> Chord:
         sub_chord_str = chord_str
@@ -165,7 +217,8 @@ class ModifiedSongsLatexChordParser(ChordParser):
         return parsed
 
 
-class DefaultFormat(SongFormat):
+@dataclasses.dataclass
+class BracketFormat(SongFormat):
     name = "default"
     can_read = True
     can_write = True
@@ -177,26 +230,39 @@ class DefaultFormat(SongFormat):
     chord_start_mark: str = "["
     chord_end_mark: str = "]"
 
-    chord_parser: DefaultChordParser = DefaultChordParser()
+    chord_parser: TextChordParser = dataclasses.field(default_factory=lambda: TextChordParser())
     part_separator_pattern: re.Pattern = re.compile(r"\n\s*\n")
-    whitespace_normalizers: list[tuple[re.Pattern, str]] = [
-        (re.compile(r"\s*\n\s*"), "\n"),  # remove all space around newlines
-        (re.compile(r"[^\S\r\n]+"), " "),  # change all space except newline to a single space
-    ]
-    heading_markers: list[str] = [default_heading_marker, ": "]
-    strophe_mark_delimiters: list[str] = [default_strophe_mark_delimiter, ":"]
-    direct_strophe_marks: dict[str, type[StropheMark]] = {
-        "R": ChorusMark,
-        # "C": CodaMark,  # coda recognition is done by normalization in the model
-    }
-    strophe_mark_patterns: list[tuple[re.Pattern, type[StropheMark]]] = [
-        (re.compile(r"\d+"), NumberedStropheMark),
-        (re.compile(r"[A-E]+"), LetteredStropheMark),
-    ]
+    whitespace_normalizers: list[tuple[re.Pattern, str]] = dataclasses.field(
+        default_factory=lambda: [
+            (re.compile(r"\s*\n\s*"), "\n"),  # remove all space around newlines
+            (re.compile(r"[^\S\r\n]+"), " "),  # change all space except newline to a single space
+        ]
+    )
+    additional_heading_markers: list[str] = dataclasses.field(default_factory=lambda: [": "])
+    additional_strophe_mark_delimiters: list[str] = dataclasses.field(default_factory=lambda: [":"])
+    direct_strophe_marks: dict[str, type[StropheMark]] = dataclasses.field(
+        default_factory=lambda: {
+            "R": ChorusMark,
+            # "C": CodaMark,  # coda recognition is done by normalization in the model
+        }
+    )
+    strophe_mark_patterns: list[tuple[re.Pattern, type[StropheMark]]] = dataclasses.field(
+        default_factory=lambda: [
+            (re.compile(r"\d+"), NumberedStropheMark),
+            (re.compile(r"[A-E]+"), LetteredStropheMark),
+        ]
+    )
 
     untitled_title: str = "<Untitled>"
     heading_indent: int = 8
     annotation_indent: int = 5
+
+    def __post_init__(self):
+        self.heading_markers: list[str] = [self.default_heading_marker, *self.additional_heading_markers]
+        self.strophe_mark_delimiters: list[str] = [
+            self.default_strophe_mark_delimiter,
+            *self.additional_strophe_mark_delimiters,
+        ]
 
     def loads(self, song_text: str) -> Song:
         parts = self._split_song_parts(song_text)
@@ -241,6 +307,7 @@ class DefaultFormat(SongFormat):
         return []
 
     def _try_parse_annotations(self, part: str, initial: bool = True) -> list[Annotation]:
+        del part, initial
         return []  # TODO
 
     def _parse_strophe(self, part: str) -> Strophe:
@@ -334,10 +401,10 @@ class DefaultFormat(SongFormat):
             return seg.text
 
 
-class AgamaFormat(DefaultFormat):
-    name = "agama"
-    empty_line_pattern = re.compile(r"\n\s*\n")
-    empty_startline_pattern = re.compile(r"^\s*\n")
+class AgamaFormat(BracketFormat):
+    name: str = "agama"
+    empty_line_pattern: re.Pattern[str] = re.compile(r"\n\s*\n")
+    empty_startline_pattern: re.Pattern[str] = re.compile(r"^\s*\n")
 
     def loads(self, song_text: str) -> Song:
         raise NotImplementedError
@@ -425,97 +492,121 @@ class CommandArgSetting:
     raw_args: list[int] = dataclasses.field(default_factory=list)
 
 
+@dataclasses.dataclass
 class ModifiedSongsLatexFormat(SongFormat):
-    name = "latex-songs-modif"
-    can_read = True
-    can_write = True
+    name: ClassVar[str] = "latex-songs-modif"
+    can_read: ClassVar[bool] = True
+    can_write: ClassVar[bool] = True
 
-    beginsong_pattern = re.compile(r"\s*\\beginsong\{(?P<title>[^}]+?)}(?:\[(?P<annots>[^]]+?)])?")
-    beginsong_annot_pattern = re.compile(r"(?P<key>[a-z]+)=\{(?P<value>[^}]*?)}")
-    beginsong_annot_keys = {"by": AuthorAnnotation}
-    simple_beginverse_commands: dict[str, type[StropheMark]] = {
-        "emptyv": EmptyStropheMark,
-        "freev": EmptyStropheMark,
-        "chor": ChorusMark,
-        "intro": IntroMark,
-        "solo": SoloMark,
-        "bridge": BridgeMark,
-        "chorusi": functools.partial(NumberedChorusMark, number=1),
-        "chorusii": functools.partial(NumberedChorusMark, number=2),
-        "averse": functools.partial(LetteredStropheMark, letter="A"),
-        "bverse": functools.partial(LetteredStropheMark, letter="B"),
-        "cverse": functools.partial(LetteredStropheMark, letter="C"),
-        "recite": RecitationMark,
-    }
-    simple_beginverse_command_names = {v(): k for k, v in simple_beginverse_commands.items()}
-    simple_beginverse_command_names[CodaMark()] = "cverse"
-    numbered_beginverse_command = "num"
-    beginverse_commands = [numbered_beginverse_command] + list(simple_beginverse_commands.keys())
-    endverse_commands = ["fin", "cl"]
-    strophe_split_pattern = re.compile(r"\\(?=(?:" + "|".join(beginverse_commands) + r")\b)")
-    endverse_pattern = re.compile(r"\\(?:" + "|".join(endverse_commands) + r")\b")
-    strophe_token_pattern = re.compile(r"([]\\[{}])")
-    command_name_pattern = re.compile(r"\w+")
-    whitespace_pattern = re.compile(r"\s+")
-    noop_commands = ["emptyspace", r"\\", "qquad"]
-    chord_parser = ModifiedSongsLatexChordParser()
-    chord_level_commands = {
-        0: "{}",
-        1: "\\hidx{{{}}}",
-        -1: "\\didx{{{}}}",
-    }
-    strophe_mark_commands: dict[StropheMark, str] = {
-        EmptyStropheMark(): "nempty",
-        ChorusMark(): "nchorus",
-        NumberedChorusMark(number=1): "nchorusi",
-        NumberedChorusMark(number=2): "nchorusii",
-        LetteredStropheMark(letter="A"): "naverse",
-        LetteredStropheMark(letter="B"): "nbverse",
-        LetteredStropheMark(letter="C"): "ncverse",
-        IntroMark(): "nintro",
-        SoloMark(): "nsolo",
-        BridgeMark(): "nbridge",
-        RecitationMark(): "nrecite",
-    }
-    simple_text_commands: dict[str, list[StropheSegment | ProcessingInstruction]] = {
-        "chordson": [TurnChordsOn()],
-        "chordsoff": [TurnChordsOff()],
-        "ldots": [IndeterminateChordingSegment("...")],
-        "endsong": [],
-    }
-    for mark, command in strophe_mark_commands.items():
-        simple_text_commands[command] = [EmbeddedStropheMark(mark)]
-    text_load_repls: dict[str, str] = {
-        "~-- ": " - ",
-        " -- ": " - ",
-    }
-    text_load_patterns: dict[re.Pattern, str] = {re.compile(r"\s+\n"): "\n"}
-    text_dump_repls: dict[str, str] = {v: k for k, v in text_load_repls.items()} | {
-        "\n": "\\\\\n",
-        "...": "\\ldots{}",
-        " - ": "~-- ",
-    }
-    text_dump_patterns: dict[re.Pattern, str] = {re.compile(r"\((?P<inner>[^\\)]+)\)"): r"\\emph{(\1)}"}
-    repcommands = {
-        ChorusMark(): "repchorus",
-        NumberedChorusMark(number=1): "repchorusi",
-        NumberedChorusMark(number=2): "repchorusii",
-    }
-    no_chord_brace_length_multiple = 1.75
-    no_chord_brace_length = 3
-    command_arg_settings: dict[str, CommandArgSetting] = {
-        "capo": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
-        "transpose": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
-        "pick": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
-        "musicnote": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
-        "repsec": CommandArgSetting(min_args=2, max_args=2, raw_args=[]),
-        "fadeout": CommandArgSetting(min_args=0, max_args=0, raw_args=[]),
-        "showchordtab": CommandArgSetting(min_args=5, max_args=5, raw_args=[0, 1, 2, 3, 4]),
-    }
+    beginsong_pattern: re.Pattern[str] = re.compile(r"\s*\\beginsong\{(?P<title>[^}]+?)}(?:\[(?P<annots>[^]]+?)])?")
+    beginsong_annot_pattern: re.Pattern[str] = re.compile(r"(?P<key>[a-z]+)=\{(?P<value>[^}]*?)}")
+    beginsong_annot_keys: dict[str, type[Annotation]] = dataclasses.field(
+        default_factory=lambda: {"by": AuthorAnnotation}
+    )
+    simple_beginverse_commands: dict[str, type[StropheMark] | functools.partial[StropheMark]] = dataclasses.field(
+        default_factory=lambda: {
+            "emptyv": EmptyStropheMark,
+            "freev": EmptyStropheMark,
+            "chor": ChorusMark,
+            "intro": IntroMark,
+            "solo": SoloMark,
+            "bridge": BridgeMark,
+            "chorusi": functools.partial(NumberedChorusMark, number=1),
+            "chorusii": functools.partial(NumberedChorusMark, number=2),
+            "averse": functools.partial(LetteredStropheMark, letter="A"),
+            "bverse": functools.partial(LetteredStropheMark, letter="B"),
+            "cverse": functools.partial(LetteredStropheMark, letter="C"),
+            "recite": RecitationMark,
+        }
+    )
+    numbered_beginverse_command: str = "num"
+    endverse_commands: list[str] = dataclasses.field(default_factory=lambda: ["fin", "cl"])
+    endverse_pattern: re.Pattern[str] = re.compile(r"\\(?:" + "|".join(endverse_commands) + r")\b")
+    strophe_token_pattern: re.Pattern[str] = re.compile(r"([]\\[{}])")
+    command_name_pattern: re.Pattern[str] = re.compile(r"\w+")
+    whitespace_pattern: re.Pattern[str] = re.compile(r"\s+")
+    noop_commands: list[str] = dataclasses.field(default_factory=lambda: ["emptyspace", r"\\", "qquad"])
+    chord_parser: ChordParser = dataclasses.field(default_factory=lambda: ModifiedSongsLatexChordParser())
+    chord_level_commands: dict[int, str] = dataclasses.field(
+        default_factory=lambda: {
+            0: "{}",
+            1: "\\hidx{{{}}}",
+            -1: "\\didx{{{}}}",
+        }
+    )
+    strophe_mark_commands: dict[StropheMark, str] = dataclasses.field(
+        default_factory=lambda: {
+            EmptyStropheMark(): "nempty",
+            ChorusMark(): "nchorus",
+            NumberedChorusMark(number=1): "nchorusi",
+            NumberedChorusMark(number=2): "nchorusii",
+            LetteredStropheMark(letter="A"): "naverse",
+            LetteredStropheMark(letter="B"): "nbverse",
+            LetteredStropheMark(letter="C"): "ncverse",
+            IntroMark(): "nintro",
+            SoloMark(): "nsolo",
+            BridgeMark(): "nbridge",
+            RecitationMark(): "nrecite",
+        }
+    )
+    simple_text_commands: dict[str, list[StropheSegment | ProcessingInstruction]] = dataclasses.field(
+        default_factory=lambda: {
+            "chordson": [TurnChordsOn()],
+            "chordsoff": [TurnChordsOff()],
+            "ldots": [IndeterminateChordingSegment("...")],
+            "endsong": [],
+        }
+    )
+    text_load_repls: dict[str, str] = dataclasses.field(
+        default_factory=lambda: {
+            "~-- ": " - ",
+            " -- ": " - ",
+        }
+    )
+    text_load_patterns: dict[re.Pattern[str], str] = dataclasses.field(
+        default_factory=lambda: {re.compile(r"\s+\n"): "\n"}
+    )
+    text_dump_repls: dict[str, str] = dataclasses.field(
+        default_factory=lambda: {
+            "\n": "\\\\\n",
+            "...": "\\ldots{}",
+            " - ": "~-- ",
+        }
+    )
+    text_dump_patterns: dict[re.Pattern[str], str] = dataclasses.field(
+        default_factory=lambda: {re.compile(r"\((?P<inner>[^\\)]+)\)"): r"\\emph{(\1)}"}
+    )
+    repcommands: dict[StropheMark, str] = dataclasses.field(
+        default_factory=lambda: {
+            ChorusMark(): "repchorus",
+            NumberedChorusMark(number=1): "repchorusi",
+            NumberedChorusMark(number=2): "repchorusii",
+        }
+    )
+    no_chord_brace_length_multiple: float = 1.75
+    no_chord_brace_length: int = 3
+    command_arg_settings: dict[str, CommandArgSetting] = dataclasses.field(
+        default_factory=lambda: {
+            "capo": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
+            "transpose": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
+            "pick": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
+            "musicnote": CommandArgSetting(min_args=1, max_args=1, raw_args=[0]),
+            "repsec": CommandArgSetting(min_args=2, max_args=2, raw_args=[]),
+            "fadeout": CommandArgSetting(min_args=0, max_args=0, raw_args=[]),
+            "showchordtab": CommandArgSetting(min_args=5, max_args=5, raw_args=[0, 1, 2, 3, 4]),
+        }
+    )
 
-    def __init__(self):
+    def __post_init__(self):
         super().__init__()
         self.complex_text_commands["showchordtab"] = self._parse_showchordtab
+        for mark, command in self.strophe_mark_commands.items():
+            self.simple_text_commands[command] = [EmbeddedStropheMark(mark)]
+        self.simple_beginverse_command_names = {v(): k for k, v in self.simple_beginverse_commands.items()}
+        self.simple_beginverse_command_names[CodaMark()] = "cverse"
+        self.beginverse_commands = [self.numbered_beginverse_command, *self.simple_beginverse_commands.keys()]
+        self.strophe_split_pattern = re.compile(r"\\(?=(?:" + "|".join(self.beginverse_commands) + r")\b)")
+        self.text_dump_repls |= {v: k for k, v in self.text_load_repls.items()}
 
     def loads(self, song_text: str) -> Song:
         annotations, remnant = self._parse_beginsong(song_text)
@@ -560,10 +651,10 @@ class ModifiedSongsLatexFormat(SongFormat):
             if key in self.beginsong_annot_keys:
                 annotations.append(self.beginsong_annot_keys[key](value))
             else:
-                warnings.warn(f"unknown \\beginsong annotation key: {key}={value}")
+                logging.warning(f"unknown \\beginsong annotation key: {key}={value}")
             other_annot_str = other_annot_str[annot_match.end() :]
         if other_annot_str:
-            warnings.warn(f"unprocessed \\beginsong content: {other_annot_str!r}", category=SongParseWarning)
+            logging.warning(f"unprocessed \\beginsong content: {other_annot_str!r}")
         return annotations, song_text[match.end() :].lstrip()
 
     def _parse_annotations(self, annot_str: str) -> list[Annotation]:
@@ -665,7 +756,7 @@ class ModifiedSongsLatexFormat(SongFormat):
         return self._join_strophe_segments(strophe_segments, chords_on=chords_on)
 
     @classmethod
-    def _join_strophe_segments(
+    def _join_strophe_segments(  # noqa: C901  # no time
         cls, segments: list[StropheSegment | ProcessingInstruction], chords_on: bool
     ) -> list[StropheSegment | ProcessingInstruction]:
         seg_i = 0
@@ -915,26 +1006,28 @@ class ModifiedSongsLatexFormat(SongFormat):
         positions = tuple(int(char) if char.lower() != "x" else None for char in chars)
         return positions
 
-    complex_text_commands: dict[
+    complex_text_commands: Mapping[
         str,
         Callable[[list[StropheSegment | ProcessingInstruction]], list[StropheSegment | ProcessingInstruction]]
         | Callable[[str, ...], list[Annotation]],
-    ] = {
-        "cseq": (lambda segs: segs),
-        "uv": (lambda segs: [IndeterminateChordingSegment('"')] + segs + [IndeterminateChordingSegment('"')]),
-        "emph": (lambda segs: segs),
-        "rep": (lambda segs: [RepeatCount(int(segs[0].text))]),
-        "repchorus": functools.partial(_parse_repsec_marked, mark=ChorusMark()),
-        "repchorusi": functools.partial(_parse_repsec_marked, mark=NumberedChorusMark(number=1)),
-        "repchorusii": functools.partial(_parse_repsec_marked, mark=NumberedChorusMark(number=2)),
-        "capo": (lambda arg: [CapoAnnotation(int(arg))]),
-        "transpose": (lambda arg: [TransposeAnnotation(int(arg))]),
-        "pick": (lambda arg: [PickAnnotation(arg)]),
-        "musicnote": (lambda arg: [NoteAnnotation(arg)]),
-        "reppart": (lambda segs: [Repetition(segs)]),
-        "repsec": (lambda markers, segs, rm=_parse_repsec_marked, rr=_parse_repsec_marker: rm(segs, rr(markers))),
-        "fadeout": (lambda: [EmbeddedAnnotation(FadeOutAnnotation())]),
-    }
+    ] = MappingProxyType(
+        {
+            "cseq": (lambda segs: segs),
+            "uv": (lambda segs: [IndeterminateChordingSegment('"'), *segs, IndeterminateChordingSegment('"')]),
+            "emph": (lambda segs: segs),
+            "rep": (lambda segs: [RepeatCount(int(segs[0].text))]),
+            "repchorus": functools.partial(_parse_repsec_marked, mark=ChorusMark()),
+            "repchorusi": functools.partial(_parse_repsec_marked, mark=NumberedChorusMark(number=1)),
+            "repchorusii": functools.partial(_parse_repsec_marked, mark=NumberedChorusMark(number=2)),
+            "capo": (lambda arg: [CapoAnnotation(int(arg))]),
+            "transpose": (lambda arg: [TransposeAnnotation(int(arg))]),
+            "pick": (lambda arg: [PickAnnotation(arg)]),
+            "musicnote": (lambda arg: [NoteAnnotation(arg)]),
+            "reppart": (lambda segs: [Repetition(segs)]),
+            "repsec": (lambda markers, segs, rm=_parse_repsec_marked, rr=_parse_repsec_marker: rm(segs, rr(markers))),
+            "fadeout": (lambda: [EmbeddedAnnotation(FadeOutAnnotation())]),
+        }
+    )
 
     def dumps(self, song: Song, chords: bool = True) -> str:
         parts = [self.dump_beginsong(song)]
@@ -950,7 +1043,7 @@ class ModifiedSongsLatexFormat(SongFormat):
         meta = f"[by={{{', '.join(authors)}}}]" if authors else ""  # TODO more annotation types to cover songs meta tag
         return f"\\beginsong{{{song.get_title()}}}{meta}\n\\chordsoff"
 
-    def dump_endsong(self, song: Song) -> str:
+    def dump_endsong(self, song: Song) -> str:  # noqa: ARG002 # format compatibility
         return "\\endsong"
 
     def dump_annotations(self, song: Song, chords: bool = True) -> str:
@@ -972,7 +1065,10 @@ class ModifiedSongsLatexFormat(SongFormat):
             return "\\freev\\fadeout\\emptyspace\\\\cl\n"
         elif isinstance(annot, ShowChordTab):
             # \showchordtab{C/G}{332010:342010}{1.5}{10}{4}
-            return f"\\showchordtab{{{self.dump_chord(annot.chord)}}}{{{annot.layout_str}}}{{{annot.width}}}{{{annot.hpos}}}{{{annot.vpos}}}"
+            return (
+                f"\\showchordtab{{{self.dump_chord(annot.chord)}}}{{{annot.layout_str}}}"
+                f"{{{annot.width}}}{{{annot.hpos}}}{{{annot.vpos}}}"
+            )
         elif isinstance(annot, TurnChordsOff):
             return ""  # done automatically, always
         raise TypeError(f"unknown annotation type: {annot!r}")
@@ -1041,7 +1137,7 @@ class ModifiedSongsLatexFormat(SongFormat):
 
     def dump_segments(self, segments: list[StropheSegment], chords: bool) -> str:
         dumped = []
-        if chords and segments and isinstance(segments[0], (ChordedSegment, UnknownChordSegment)):
+        if chords and segments and isinstance(segments[0], ChordedSegment | UnknownChordSegment):
             if all(isinstance(seg, ChordedSegment) and (not seg.text or seg.text.isspace()) for seg in segments):
                 return self.dump_cseq(segments)
             dumped.append("\\chordson\n")
@@ -1051,7 +1147,7 @@ class ModifiedSongsLatexFormat(SongFormat):
             prev_seg = seg
         return "".join(dumped).replace("\n\n", "\n")
 
-    def dump_segment(self, seg: StropheSegment, chords: bool, prev_seg: StropheSegment | None):
+    def dump_segment(self, seg: StropheSegment, chords: bool, prev_seg: StropheSegment | None):  # noqa: C901 # no time
         if isinstance(seg, ChordedSegment) and chords:
             if isinstance(prev_seg, UnchordedSegment):
                 yield "\n\\chordson\n"
@@ -1066,10 +1162,8 @@ class ModifiedSongsLatexFormat(SongFormat):
                     yield self.dump_text(other_lines)
                 else:
                     yield self._dump_chorded_text(seg.text, len(dumped_chord))
-        elif (
-            isinstance(seg, UnchordedSegment)
-            or isinstance(seg, UnknownChordSegment)
-            or (isinstance(seg, ChordedSegment) and not chords)
+        elif isinstance(seg, UnchordedSegment | UnknownChordSegment) or (
+            isinstance(seg, ChordedSegment) and not chords
         ):
             if chords and isinstance(prev_seg, ChordedSegment):
                 yield "\n\\chordsoff\n"
@@ -1113,7 +1207,7 @@ class ModifiedSongsLatexFormat(SongFormat):
 
     def dump_chord(self, chord: Chord) -> str:
         modif_groups = []
-        for i, modif in enumerate(chord.modifiers):
+        for modif in chord.modifiers:
             if modif_groups and modif.level == modif_groups[-1][0]:
                 modif_groups[-1][1].append(modif.to_string())
             else:
@@ -1171,15 +1265,15 @@ if __name__ == "__main__":
     import pprint
 
     chords_path = Path(__file__).parent.parent / "test" / "data"
-    format = ModifiedSongsLatexFormat()
+    in_out_format = ModifiedSongsLatexFormat()
     for path in chords_path.iterdir():
         if path.suffix == ".tex" and "berousek" in str(path):
             text = path.open(encoding="utf8").read()
-            print(text)
-            song = format.loads(text).normalized()
-            pprint.pprint(song)
-            result = format.dumps(song, chords=True)
-            print(result)
+            print(text)  # noqa: T201
+            song = in_out_format.loads(text).normalized()
+            pprint.pprint(song)  # noqa: T203
+            result = in_out_format.dumps(song, chords=True)
+            print(result)  # noqa: T201
 
     # # ahoj_slunko_path = Path(__file__).parent.parent / "test" / "data" / "ahoj_slunko.txt"
     # # with ahoj_slunko_path.open(encoding="utf8") as f:
