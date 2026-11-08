@@ -55,7 +55,7 @@ from pysongbook.model import (
     TitleAnnotation,
     TransposeAnnotation,
     UnchordedSegment,
-    UnknownChordSegment,
+    UnknownChordSegment, Comment,
 )
 from pysongbook.modify import NORMALIZER
 
@@ -481,7 +481,9 @@ class ModifiedSongsLaTeXFormat(SongFormat):
         strophes_and_annots = []
         current_pos = 0
         while current_pos < len(annot_str):
-            current_pos = self._skip_whitespace_and_comments(annot_str, pos=current_pos)
+            comment, current_pos = self._skip_whitespace_and_comments(annot_str, pos=current_pos)
+            if comment:
+                strophes_and_annots.append(comment)
             if current_pos >= len(annot_str):
                 break
             part_results, current_pos = self._parse_command_chunk(annot_str, pos=current_pos)
@@ -506,19 +508,24 @@ class ModifiedSongsLaTeXFormat(SongFormat):
             return [UnchordedSegment(text=segment.text) for segment in segments]
         return segments
 
-    def _skip_whitespace_and_comments(self, text: str, pos: int) -> int:
+    def _skip_whitespace_and_comments(self, text: str, pos: int) -> tuple[Comment | None, int]:
         current_pos = pos
+        comment = None
         while True:
             whitespace_match = self.whitespace_pattern.match(text[current_pos:])
             if whitespace_match:
                 current_pos += len(whitespace_match.group())
             elif text[current_pos] == "%":
-                current_pos = text.find("\n", current_pos) + 1
-                if current_pos == 0:  # newline not found, assume end of string
-                    return len(text)
+                comment_end_pos = text.find("\n", current_pos) + 1
+                if comment_end_pos == 0:  # newline not found, assume end of string
+                    return Comment(text=text[current_pos:]), len(text)
+                # Remove initial % and spaces and trailing newline.
+                comment_text = text[current_pos+1:comment_end_pos].lstrip().rstrip("\n")
+                comment = Comment(text=comment_text if comment is None else comment.text + "\n" + comment_text)
+                current_pos = comment_end_pos
             else:
                 break
-        return current_pos
+        return comment, current_pos
 
     def _parse_strophe(
         self, strophe_str: str, num: int, chords_on: bool
@@ -814,6 +821,8 @@ class ModifiedSongsLaTeXFormat(SongFormat):
             )
         elif isinstance(annot, TurnChordsOff):
             return ""  # done automatically, always
+        elif isinstance(annot, Comment):
+            return "% " + annot.text.replace("\n", "\n% ")
         raise TypeError(f"unknown annotation type: {annot!r}")
 
     def dump_song_items(self, song: Song, chords: bool) -> Generator[str, None, None]:

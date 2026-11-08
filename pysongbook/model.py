@@ -472,6 +472,15 @@ class FadeOutAnnotation(Annotation):
 
 
 @dataclasses.dataclass
+class Comment(Annotation):
+    text: str
+    is_chord_annotation: ClassVar[bool] = False
+
+    def to_string(self, delimiter: str) -> str:
+        return "Comment" + delimiter + self.text
+
+
+@dataclasses.dataclass
 class ShowChordTab(Annotation):
     chord: Chord
     fret: int
