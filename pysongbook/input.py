@@ -1,5 +1,5 @@
+import locale
 import logging
-import operator
 from pathlib import Path
 import sys
 
@@ -16,7 +16,7 @@ def get_inputs(input_path: Path | None, encoding: str) -> list[tuple[str, str]]:
         ]
     else:
         inputs = [(str(input_path), input_path.open(encoding=encoding).read())]
-    return sorted(inputs, key=operator.itemgetter(0))
+    return sorted(inputs, key=(lambda tup: locale.strxfrm(tup[0])))
 
 
 def parse_inputs(inputs: list[tuple[str, str]], parser_format: SongFormat, multi: bool) -> list[tuple[str, Song]]:

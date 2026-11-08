@@ -1,4 +1,5 @@
 import argparse
+import locale
 import logging
 from pathlib import Path
 
@@ -10,6 +11,8 @@ from pysongbook.input import get_inputs, parse_inputs
 from pysongbook.modify import NORMALIZER
 from pysongbook.output import serialize_outputs, write_outputs
 
+
+locale.setlocale(locale.LC_ALL, "")
 
 FORMATS = [BracketFormat, AgamaFormat, ModifiedSongsLaTeXFormat, ModelDictFormat]
 

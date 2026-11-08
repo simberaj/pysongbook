@@ -114,6 +114,7 @@ class FillInitialUnknownChordSegments(SongItemModifier):
             cur_i, cur_strophe = current
             can_replace = (
                 cur_strophe.segments
+                and not isinstance(cur_strophe, SimpleStropheRepeat)
                 and isinstance(cur_strophe.segments[0], UnknownChordSegment)
                 and any(isinstance(seg, ChordedSegment) for seg in cur_strophe.segments)
                 and prev_strophe.segments
@@ -138,13 +139,14 @@ class RecognizeCodas(SongItemModifier):
         return items
 
 
-class StripLeadingWhitespace(SongItemModifier):
+class StripStropheWhitespace(SongItemModifier):
     def modify_items(self, items: list[Strophe | Annotation]) -> list[Strophe | Annotation]:
         out_items = []
         for item in items:
             if isinstance(item, Strophe):
                 strophe = copy.deepcopy(item)
                 self._lstrip(strophe.segments)
+                self._rstrip(strophe.segments)
                 out_items.append(strophe)
             else:
                 out_items.append(item)
@@ -163,6 +165,17 @@ class StripLeadingWhitespace(SongItemModifier):
         else:  # embedded annotations etc.
             self._lstrip(segments[1:])
 
+    def _rstrip(self, segments: list[StropheSegment]) -> None:
+        if not segments:
+            return
+        last_seg = segments[-1]
+        if isinstance(last_seg, ChordedSegment | ChordlessSegment):
+            last_seg.text = last_seg.text.rstrip()
+        elif isinstance(last_seg, BaseStropheSegmentCollection):
+            self._rstrip(last_seg.segments)
+        else:
+            self._rstrip(segments[:-1])
+
 
 @dataclasses.dataclass(frozen=True)
 class CompositeModifier(SongModifier):
@@ -180,6 +193,6 @@ NORMALIZER = CompositeModifier(
         InferChorusRepetition(),
         FillInitialUnknownChordSegments(),
         RecognizeCodas(),
-        StripLeadingWhitespace(),
+        StripStropheWhitespace(),
     ]
 )

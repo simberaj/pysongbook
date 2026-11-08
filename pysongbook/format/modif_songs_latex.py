@@ -1,5 +1,4 @@
 import abc
-import copy
 from collections.abc import Callable, Generator
 import dataclasses
 import logging
@@ -414,20 +413,22 @@ class ModifiedSongsLaTeXFormat(SongFormat):
         }
         self._standalone_init_text = None
 
-    def loads(self, song_text: str) -> Song:
+    def loads(self, song_text: str) -> Song:  # noqa: C901 # no time
         annotations, remnant = self._parse_beginsong(song_text)
         strophe_strs = self.strophe_split_pattern.split(remnant)
         if len(strophe_strs) < 2:
             raise SongParseError("no strophes found")
-        # Ignore \chordsoff at the beginning of the song: it is always produced there by default to have strophes
+        # Remove \chordsoff at the beginning of the song: it is always produced there by default to have strophes
         # non-chorded by default and ease strophe spacing a bit. Individual strophes opt in by \chordson at their
         # beginning.
-        annotations.extend(
-            a for a in self._parse_annotations(strophe_strs[0].strip()) if not isinstance(a, TurnChordsOff)
-        )
+        annotations.extend(self._parse_annotations(strophe_strs[0].strip()))
+        if any(isinstance(a, TurnChordsOff) for a in annotations):
+            chords_on = False
+            annotations = [a for a in annotations if not isinstance(a, TurnChordsOff)]
+        else:
+            chords_on = True
         items: list[Annotation | Strophe] = []
         num = 1
-        chords_on = True
         for verse_str in strophe_strs[1:]:
             strophe, poststrophe_content = self._parse_strophe(verse_str.strip(), num=num, chords_on=chords_on)
             chords_on_update, poststrophe_content = process_chords_on_instructions(poststrophe_content)
@@ -490,14 +491,20 @@ class ModifiedSongsLaTeXFormat(SongFormat):
                         result = EmbeddedStrophe(
                             type(result.strophe)(
                                 mark=result.strophe.mark,
-                                # chords_on=True here to allow chorded segment merging
-                                segments=self._join_strophe_segments(result.strophe.segments, chords_on=True),
+                                segments=self._correct_chordless_segment_type(
+                                    self._join_strophe_segments(result.strophe.segments, chords_on=True)
+                                ),
                             )
                         )
                     strophes_and_annots.append(result)
                 else:
                     raise ValueError(f"invalid annotation chunk content: {result!r} from {annot_str!r}")
         return strophes_and_annots
+
+    def _correct_chordless_segment_type(self, segments: list[StropheSegment]) -> list[StropheSegment]:
+        if all(isinstance(segment, UnknownChordSegment) for segment in segments):
+            return [UnchordedSegment(text=segment.text) for segment in segments]
+        return segments
 
     def _skip_whitespace_and_comments(self, text: str, pos: int) -> int:
         current_pos = pos
@@ -570,7 +577,6 @@ class ModifiedSongsLaTeXFormat(SongFormat):
     def _join_strophe_segments(  # noqa: C901  # no time
         cls, segments: list[StropheSegment | ProcessingInstruction], chords_on: bool
     ) -> list[StropheSegment | ProcessingInstruction]:
-        prev_segments = copy.deepcopy(segments)
         seg_i = 0
         current_chords_on = chords_on
         while seg_i < len(segments):
@@ -770,6 +776,7 @@ class ModifiedSongsLaTeXFormat(SongFormat):
         annot_part = self.dump_annotations(song, chords=chords)
         if annot_part:
             parts.append(annot_part)
+        parts.append("\\chordsoff")
         parts.extend(self.dump_song_items(song, chords=chords))
         parts.append(self.dump_endsong(song))
         return "\n".join(parts)
@@ -777,7 +784,7 @@ class ModifiedSongsLaTeXFormat(SongFormat):
     def dump_beginsong(self, song: Song) -> str:
         authors = [auth_annot.name for auth_annot in song.get_annotations_of_type(AuthorAnnotation)]
         meta = f"[by={{{', '.join(authors)}}}]" if authors else ""  # TODO more annotation types to cover songs meta tag
-        return f"\\beginsong{{{song.get_title()}}}{meta}\n\\chordsoff"
+        return f"\\beginsong{{{song.get_title()}}}{meta}"
 
     def dump_endsong(self, song: Song) -> str:  # noqa: ARG002 # format compatibility
         return "\\endsong"
