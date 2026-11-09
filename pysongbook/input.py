@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 import sys
 
-from pysongbook.format.core import SongFormat
+from pysongbook.format.core import SongFormat, SongParseError
 from pysongbook.model import Song
 
 
@@ -27,5 +27,9 @@ def parse_inputs(inputs: list[tuple[str, str]], parser_format: SongFormat, multi
     songs = []
     for pathname, inp in inputs:
         logging.debug("Parsing %s", pathname)
-        songs.append((pathname, parser_format.loads(inp)))
+        try:
+            song = parser_format.loads(inp)
+        except SongParseError as e:
+            raise SongParseError(f"error while parsing {pathname}") from e
+        songs.append((pathname, song))
     return songs
