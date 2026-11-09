@@ -82,6 +82,10 @@ class EmbeddedStrophe(StropheSegment):
         raise ValueError(f"cannot subtract {other!r} from embedded strophe")
 
     @property
+    def raw_text(self) -> str:
+        raise NotImplementedError
+
+    @property
     def text(self) -> str:
         raise NotImplementedError
 

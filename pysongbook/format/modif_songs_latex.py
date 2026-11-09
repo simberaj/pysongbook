@@ -55,7 +55,7 @@ from pysongbook.model import (
     TitleAnnotation,
     TransposeAnnotation,
     UnchordedSegment,
-    UnknownChordSegment, Comment,
+    UnknownChordSegment, Comment, start_has_chords_on, all_have_chords_on, end_has_chords_on,
 )
 from pysongbook.modify import NORMALIZER
 
@@ -345,7 +345,7 @@ class ModifiedSongsLaTeXFormat(SongFormat):
         default_factory=lambda: {re.compile(r"\s+\n"): "\n"}
     )
     text_dump_repls: dict[str, str] = dataclasses.field(
-        default_factory=lambda: {"\n": "\\\\\n", "...": "\\ldots{}", " - ": "~-- "}
+        default_factory=lambda: {"\n": "\\\\\n", "...": "\\ldots{}", " - ": "~-- ", '"': "''"}
     )
     text_dump_patterns: dict[re.Pattern[str], str] = dataclasses.field(
         default_factory=lambda: {
@@ -442,6 +442,8 @@ class ModifiedSongsLaTeXFormat(SongFormat):
                 for item in poststrophe_content:
                     if isinstance(item, EmbeddedStrophe):
                         items.append(item.strophe)
+                    elif isinstance(item, EmbeddedAnnotation):
+                        items.append(item.annotation)
                     elif isinstance(item, Annotation):
                         items.append(item)
                     else:
@@ -812,7 +814,7 @@ class ModifiedSongsLaTeXFormat(SongFormat):
         elif isinstance(annot, NoteAnnotation):
             return f"\\musicnote{{{annot.text}}}"
         elif isinstance(annot, FadeOutAnnotation):
-            return "\\freev\\fadeout\\emptyspace\\\\\\cl\n"
+            return "\\freev\\fadeout\\emptyspace\\\\\\cl"
         elif isinstance(annot, ShowChordTab):
             # \showchordtab{C/G}{332010:342010}{1.5}{10}{4}
             return (
@@ -889,8 +891,8 @@ class ModifiedSongsLaTeXFormat(SongFormat):
 
     def dump_segments(self, segments: list[StropheSegment], chords: bool) -> str:
         dumped = []
-        if chords and segments and isinstance(segments[0], ChordedSegment | UnknownChordSegment):
-            if all(isinstance(seg, ChordedSegment) and (not seg.text or seg.text.isspace()) for seg in segments):
+        if chords and segments and start_has_chords_on(segments):
+            if all_have_chords_on(segments) and all((not seg.raw_text or seg.raw_text.isspace()) for seg in segments):
                 return self.dump_cseq(segments)
             dumped.append("\\chordson\n")
         prev_seg = None
@@ -901,7 +903,7 @@ class ModifiedSongsLaTeXFormat(SongFormat):
 
     def dump_segment(self, seg: StropheSegment, chords: bool, prev_seg: StropheSegment | None):  # noqa: C901 # no time
         if isinstance(seg, ChordedSegment) and chords:
-            if isinstance(prev_seg, UnchordedSegment):
+            if prev_seg is not None and not end_has_chords_on([prev_seg]):
                 yield "\n\\chordson\n"
             dumped_chord = self.dump_chord(seg.chord)
             yield f"\\[{dumped_chord}]"
@@ -920,9 +922,9 @@ class ModifiedSongsLaTeXFormat(SongFormat):
         elif isinstance(seg, UnchordedSegment | UnknownChordSegment) or (
             isinstance(seg, ChordedSegment) and not chords
         ):
-            if chords and isinstance(prev_seg, ChordedSegment | UnknownChordSegment):
+            if chords and prev_seg is not None and start_has_chords_on([prev_seg]) and isinstance(seg, UnchordedSegment):
                 yield "\n\\chordsoff\n"
-            if isinstance(seg, UnknownChordSegment) and isinstance(prev_seg, UnchordedSegment):
+            if chords and isinstance(seg, UnknownChordSegment) and prev_seg is not None and not start_has_chords_on([prev_seg]):
                 yield "\n\\chordson\n"
             yield self.dump_text(seg.text)
         elif isinstance(seg, RepeatCount):
@@ -931,7 +933,10 @@ class ModifiedSongsLaTeXFormat(SongFormat):
             inner = self.dump_segments(seg.segments, chords=chords)
             if inner.startswith("\\chordson"):
                 inner = inner.removeprefix("\\chordson").lstrip()
-                yield "\\chordson"
+                if prev_seg is not None and not start_has_chords_on([prev_seg]):
+                    yield "\\chordson"
+            if inner.endswith("\\\\"):
+                inner = inner.removesuffix("\\\\").rstrip()
             yield f"\\reppart{{{inner}}}"
             if seg.n_repeats > 2:
                 yield f" \\rep{{{seg.n_repeats}}}"
@@ -974,23 +979,11 @@ class ModifiedSongsLaTeXFormat(SongFormat):
         return "".join(dumped).replace("#", "\\shrp{}").replace("b", "\\flt{}")
 
     def dump_text(self, some_text: str) -> str:
-        if '"' in some_text:
-            some_text = self.dump_quoted_text(some_text)
         for pat, sub in self.text_dump_repls.items():
             some_text = some_text.replace(pat, sub)
         for pat, sub in self.text_dump_patterns.items():
             some_text = pat.sub(sub, some_text)
         return some_text
-
-    def dump_quoted_text(self, some_text: str) -> str:
-        parts = some_text.split('"')
-        quoted_text = ""
-        for i, part in enumerate(parts):
-            if i % 2 == 0:
-                quoted_text += part
-            else:
-                quoted_text += f"\\uv{{{part}}}"
-        return quoted_text
 
     def merge(self, song_texts: list[str]) -> str:
         return "\n\n".join(song_texts)

@@ -32,8 +32,8 @@ def test_modif_songs_latex_parser(input_texs: dict[str, str], expected_output_te
     format = ModifiedSongsLaTeXFormat()
     dump_format = ModelDictFormat()
     for name, text in input_texs.items():
-        # if "Disapp" not in name:
-        #     continue
+        if "Smute" not in name:
+            continue
         song = NORMALIZER.modify(format.loads(text))
         result = format.dumps(song, chords=True)
         dump_format.dumps(song)

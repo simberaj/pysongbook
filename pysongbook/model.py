@@ -30,6 +30,11 @@ class StropheSegment(ABC):
     def text(self) -> str:
         raise NotImplementedError
 
+    @property
+    @abc.abstractmethod
+    def raw_text(self) -> str:
+        raise NotImplementedError
+
     @abc.abstractmethod
     def splitlines(self) -> list["StropheSegment"]:
         raise NotImplementedError
@@ -53,6 +58,10 @@ class ChordlessSegment(StropheSegment):
         if text_chunks[-1]:
             segments.append(self.__class__(text=text_chunks[-1]))
         return segments
+
+    @property
+    def raw_text(self) -> str:
+        return self.text
 
 
 class UnchordedSegment(ChordlessSegment):
@@ -184,9 +193,15 @@ class ChordedSegment(StropheSegment):
             return [self]
         return [self.__class__(chord=self.chord, text=plseg.text) for plseg in plain_split]
 
+    @property
+    def raw_text(self) -> str:
+        return self.text
+
 
 class BaseStropheSegmentCollection(StropheSegment, ABC):
     """A base class for nested strophe segments (segments that contain other segments)."""
+
+    segments: list[StropheSegment]
 
 
 @dataclasses.dataclass
@@ -207,12 +222,50 @@ class Repetition(BaseStropheSegmentCollection):
         # return "".join(seg.text for seg in self.segments)
         raise ValueError("cannot get text of repetition")
 
+    @property
+    def raw_text(self) -> str:
+        return "".join(seg.raw_text for seg in self.segments)
+
     def splitlines(self) -> list[Self]:
         return [
             self.__class__(
                 segments=[subseg for seg in self.segments for subseg in seg.splitlines()], n_repeats=self.n_repeats
             )
         ]
+
+
+def start_has_chords_on(segments: list[StropheSegment]) -> bool:
+    if not segments:
+        raise ValueError("empty segments")
+    first_segment = segments[0]
+    if isinstance(first_segment, BaseStropheSegmentCollection):
+        if not first_segment.segments:
+            return start_has_chords_on(segments[1:])
+        return start_has_chords_on(first_segment.segments)
+    return isinstance(first_segment, ChordedSegment | UnknownChordSegment)
+
+
+def end_has_chords_on(segments: list[StropheSegment]) -> bool:
+    if not segments:
+        raise ValueError("empty segments")
+    last_segment = segments[-1]
+    if isinstance(last_segment, BaseStropheSegmentCollection):
+        if not last_segment.segments:
+            return start_has_chords_on(segments[:-1])
+        return end_has_chords_on(last_segment.segments)
+    return isinstance(last_segment, ChordedSegment | UnknownChordSegment)
+
+
+def all_have_chords_on(segments: list[StropheSegment]) -> bool:
+    if not segments:
+        raise ValueError("empty segments")
+    for seg in segments:
+        if isinstance(seg, BaseStropheSegmentCollection):
+            if not all_have_chords_on(seg.segments):
+                return False
+        elif not isinstance(seg, ChordedSegment | UnknownChordSegment):
+            return False
+    return True
 
 
 # Removed because determining repeated strophe parts is not meaningfully possible.
