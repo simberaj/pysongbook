@@ -76,5 +76,8 @@ def serialize_outputs(
             return {None: merged_songs}
     elif standalone:
         logging.debug("Converting to standalone format")
-        outputs = {pathname: song_format.make_standalone(song_text, title_content=title_content or "") for pathname, song_text in outputs.items()}
+        outputs = {
+            pathname: song_format.make_standalone(song_text, title_content=title_content or "")
+            for pathname, song_text in outputs.items()
+        }
     return outputs

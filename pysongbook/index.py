@@ -1,5 +1,6 @@
 import collections
 import dataclasses
+import locale
 import logging
 from typing import ClassVar
 
@@ -24,8 +25,8 @@ class SongIndex:
 @dataclasses.dataclass(frozen=True)
 class IndexBuilder:
     title: str
-    annotation_type: type[Annotation]
-    group_annotation_type: type[Annotation] | None = None
+    group_annotation_type: type[Annotation]
+    label_annotation_type: type[Annotation] = TitleAnnotation
     specifier_annotation_type: type[Annotation] | None = None
     is_initial: ClassVar[bool] = False
 
@@ -36,26 +37,31 @@ class IndexBuilder:
         items = [
             IndexItem(label=label, order=i + 1, song=song, specifier=None)
             for i, song in enumerate(songs)
-            if (label := self._get_annotation(song, self.annotation_type)) is not None
+            if (label := self._get_annotation(song, self.label_annotation_type)) is not None
         ]
         if self.specifier_annotation_type:
             items = self._add_specifiers(items)
         groups = collections.defaultdict(list)
         for item in items:
-            group = self.group(item.label)
-            groups[group].append(item)
-        return SongIndex(groups=dict(groups), is_initial=self.is_initial, title=self.title)
+            group_annot = self._get_annotation(item.song, self.group_annotation_type)
+            if group_annot is not None:
+                group = self.group(group_annot)
+                groups[group].append(item)
+        return SongIndex(
+            groups=dict(sorted(groups.items(), key=(lambda tup: locale.strxfrm(tup[0])))),
+            is_initial=self.is_initial,
+            title=self.title,
+        )
 
     def _add_specifiers(self, items: list[IndexItem]) -> list[IndexItem]:
         label_counts = collections.Counter(item.label for item in items)
         duplicate_labels = {label for label, count in label_counts.items() if count > 1}
-        out_items = []
-        for item in items:
-            if item.label in duplicate_labels:
-                if (specifier := self._get_specifier_annotation(item.song)) is not None:
-                    item = dataclasses.replace(item, specifier=specifier)
-            out_items.append(item)
-        return out_items
+        return [
+            dataclasses.replace(item, specifier=specifier)
+            if item.label in duplicate_labels and (specifier := self._get_specifier_annotation(item.song)) is not None
+            else item
+            for item in items
+        ]
 
     @staticmethod
     def _get_annotation(song: Song, annotation_type: type[Annotation]) -> str | None:
@@ -70,7 +76,10 @@ class IndexBuilder:
         return self._get_annotation(song, self.specifier_annotation_type) if self.specifier_annotation_type else None
 
     def sort_key(self, song: Song) -> tuple[str | None, ...]:
-        return (self._get_annotation(song, self.annotation_type) or "", self._get_specifier_annotation(song) or "")
+        return (
+            locale.strxfrm(self._get_annotation(song, self.label_annotation_type) or ""),
+            locale.strxfrm(self._get_specifier_annotation(song) or ""),
+        )
 
 
 class InitialIndexBuilder(IndexBuilder):
@@ -84,7 +93,7 @@ class InitialIndexBuilder(IndexBuilder):
             return self.NUMERIC_LABEL
         lup = label.upper()
         if lup.startswith("CH"):  # TODO internationalize this
-            return "CH"
+            return "Ch"
         return label[0]
 
 
@@ -98,9 +107,9 @@ class MappedIndexBuilder(IndexBuilder):
 INDEX_BUILDERS = {
     # TODO internationalize this
     "titleidx": InitialIndexBuilder(
-        annotation_type=TitleAnnotation, specifier_annotation_type=AuthorAnnotation, title="Písně podle názvu"
+        group_annotation_type=TitleAnnotation, specifier_annotation_type=AuthorAnnotation, title="Písně podle názvu"
     ),
-    "authidx": IndexBuilder(annotation_type=AuthorAnnotation, title="Písně podle autora"),
+    "authidx": IndexBuilder(group_annotation_type=AuthorAnnotation, title="Písně podle autora"),
     # "Písně podle jazyka": MappedIndexBuilder(annotation_type=LanguageAnnotation),
     # "Písně podle žánru": MappedIndexBuilder(annotation_type=GenreAnnotation),
 }

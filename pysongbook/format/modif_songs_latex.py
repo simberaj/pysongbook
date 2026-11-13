@@ -1,12 +1,12 @@
 import abc
-from collections.abc import Callable, Generator
+from collections.abc import Callable, Generator, Iterable
 import dataclasses
 from functools import cached_property
 import hashlib
 import logging
 from pathlib import Path
 import re
-from typing import ClassVar, cast, Iterable
+from typing import ClassVar, cast
 import unicodedata
 
 from pysongbook.format.chord import ChordParser, TextChordParser
@@ -1061,7 +1061,9 @@ class ModifiedSongsLaTeXFormat(SongFormat):
             amended_song_texts = []
             for i, song_text in enumerate(song_texts):
                 beginsong, rest = song_text.split("\n", maxsplit=1)
-                amended_song_texts.append(beginsong + f"\\hypertarget{{song-{i+1}}}{{}}\\label{{song-{i+1}}}\n" + rest)
+                amended_song_texts.append(
+                    beginsong + f"\\hypertarget{{song-{i + 1}}}{{}}\\label{{song-{i + 1}}}\n" + rest
+                )
             song_texts = amended_song_texts
         return "\n\n".join(song_texts)
 
