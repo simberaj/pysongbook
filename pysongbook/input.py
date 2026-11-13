@@ -28,7 +28,7 @@ def parse_inputs(inputs: list[tuple[str, str]], parser_format: SongFormat, multi
     for pathname, inp in inputs:
         logging.debug("Parsing %s", pathname)
         try:
-            song = parser_format.loads(inp)
+            song = parser_format.load_song(inp)
         except SongParseError as e:
             raise SongParseError(f"error while parsing {pathname}") from e
         songs.append((pathname, song))

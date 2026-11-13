@@ -10,7 +10,7 @@ class AgamaFormat(BracketFormat):
     empty_line_pattern: re.Pattern[str] = re.compile(r"\n\s*\n")
     empty_startline_pattern: re.Pattern[str] = re.compile(r"^\s*\n")
 
-    def loads(self, song_text: str) -> Song:
+    def load_song(self, song_text: str) -> Song:
         raise NotImplementedError
 
     def dump_strophe(self, strophe: Strophe, indent: int = 0, chords: bool = True) -> str:

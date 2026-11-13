@@ -1,8 +1,11 @@
 import abc
 from abc import ABC
+from collections.abc import Iterable
 import dataclasses
 import json
+from typing import NoReturn
 
+from pysongbook.index import SongIndex
 from pysongbook.model import Annotation, Song, Strophe, StropheMark, StropheSegment
 
 
@@ -20,7 +23,8 @@ class PositionalSongParseError(ValueError):
 class ProcessingInstruction(Annotation):
     is_chord_annotation = False
 
-    def to_string(self, delimiter: str) -> str:  # noqa: ARG002  # interface compatibility
+    @property
+    def string(self) -> NoReturn:
         raise ValueError(f"cannot serialize processing instruction {self}")
 
 
@@ -43,14 +47,14 @@ class SongFormat(ABC):
     @abc.abstractmethod
     def can_read(self) -> bool: ...
 
-    def loads(self, song_text: str) -> Song:
+    def load_song(self, song_text: str) -> Song:
         raise NotImplementedError
 
     @property
     @abc.abstractmethod
     def can_write(self) -> bool: ...
 
-    def dumps(self, song: Song) -> str:
+    def dump_song(self, song: Song) -> str:
         raise NotImplementedError
 
     @property
@@ -60,15 +64,25 @@ class SongFormat(ABC):
     def split(self, multisong_text: str) -> list[str]:
         raise NotImplementedError
 
+    @abc.abstractmethod
+    def dump_index(self, index: SongIndex, identifier: str) -> dict[str | None, str]:
+        raise NotImplementedError
+
     @property
     @abc.abstractmethod
     def can_merge(self) -> bool: ...
 
-    def merge(self, song_texts: list[str]) -> str:
-        raise NotImplementedError
+    def merge_songs(self, song_texts: Iterable[str], standalone: bool) -> str:
+        del standalone
+        return "\n\n".join(song_texts)
 
-    def make_standalone(self, song_text: str) -> str:
-        return song_text
+    def merge_indices(self, index_texts: Iterable[str]) -> str:
+        return "\n".join(index_texts)
+
+    def make_standalone(self, song_content: str, index_content: str = "", title_content: str = "") -> str:
+        if index_content or title_content:
+            return f"{title_content}\n{index_content}\n{song_content}"
+        return song_content
 
 
 @dataclasses.dataclass
@@ -115,7 +129,7 @@ class ModelDictFormat(SongFormat):
     can_merge = False
     can_split = False
 
-    def dumps(self, song: Song) -> str:
+    def dump_song(self, song: Song) -> str:
         return json.dumps(dataclasses.asdict(song))
 
 

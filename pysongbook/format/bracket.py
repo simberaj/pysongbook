@@ -7,16 +7,21 @@ from pysongbook.format.core import SongFormat, SongParseError
 from pysongbook.model import (
     Annotation,
     AuthorAnnotation,
+    CapoAnnotation,
     ChordedSegment,
     ChorusMark,
     EmptyStropheMark,
     LetteredStropheMark,
+    NoteAnnotation,
     NumberedStropheMark,
+    PickAnnotation,
+    ShowChordTab,
     Song,
     Strophe,
     StropheMark,
     StropheSegment,
     TitleAnnotation,
+    TransposeAnnotation,
     UnchordedSegment,
 )
 
@@ -63,6 +68,17 @@ class BracketFormat(SongFormat):
     untitled_title: str = "<Untitled>"
     heading_indent: int = 8
     annotation_indent: int = 5
+    annotation_labels: dict[type[Annotation], str] = dataclasses.field(
+        default_factory=lambda: {
+            AuthorAnnotation: "Author",
+            TitleAnnotation: "Title",
+            CapoAnnotation: "Capo",
+            TransposeAnnotation: "Transpose",
+            NoteAnnotation: "Note",
+            PickAnnotation: "Pick",
+            ShowChordTab: "ChordTab",
+        }
+    )
 
     def __post_init__(self):
         self.heading_markers: list[str] = [self.default_heading_marker, *self.additional_heading_markers]
@@ -71,7 +87,7 @@ class BracketFormat(SongFormat):
             *self.additional_strophe_mark_delimiters,
         ]
 
-    def loads(self, song_text: str) -> Song:
+    def load_song(self, song_text: str) -> Song:
         parts = self._split_song_parts(song_text)
         init_annot_part_i = 0
         if "\n" not in parts[0]:
@@ -146,7 +162,7 @@ class BracketFormat(SongFormat):
             body = pattern.sub(repl, body)
         return body.strip()
 
-    def dumps(self, song: Song, indent: int | None = None, chords: bool = True) -> str:
+    def dump_song(self, song: Song, indent: int | None = None, chords: bool = True) -> str:
         header = f"\n{self.dump_heading(song)}\n\n"
         other_annots = self.dump_annotations(song, chords=chords)
         if other_annots:
@@ -169,7 +185,12 @@ class BracketFormat(SongFormat):
         return "\n".join(self.dump_annotation(annot) for annot in rem_annots)
 
     def dump_annotation(self, annot: Annotation) -> str:
-        return " " * self.annotation_indent + annot.to_string(delimiter=self.default_annotation_delimiter)
+        return (
+            " " * self.annotation_indent
+            + self.annotation_labels[type(annot)]
+            + self.default_annotation_delimiter
+            + annot.string
+        )
 
     def dump_song_items(self, song: Song, indent: int | None = None, chords: bool = True) -> Generator[str, None, None]:
         if indent is None:

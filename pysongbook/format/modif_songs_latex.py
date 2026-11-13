@@ -1,10 +1,13 @@
 import abc
 from collections.abc import Callable, Generator
 import dataclasses
+from functools import cached_property
+import hashlib
 import logging
 from pathlib import Path
 import re
-from typing import ClassVar, cast
+from typing import ClassVar, cast, Iterable
+import unicodedata
 
 from pysongbook.format.chord import ChordParser, TextChordParser
 from pysongbook.format.core import (
@@ -21,6 +24,7 @@ from pysongbook.format.core import (
     TurnChordsOn,
     process_chords_on_instructions,
 )
+from pysongbook.index import SongIndex
 from pysongbook.model import (
     Annotation,
     AuthorAnnotation,
@@ -31,6 +35,7 @@ from pysongbook.model import (
     ChordlessSegment,
     ChorusMark,
     CodaMark,
+    Comment,
     EmptyStropheMark,
     FadeOutAnnotation,
     IndeterminateChordingSegment,
@@ -55,7 +60,10 @@ from pysongbook.model import (
     TitleAnnotation,
     TransposeAnnotation,
     UnchordedSegment,
-    UnknownChordSegment, Comment, start_has_chords_on, all_have_chords_on, end_has_chords_on,
+    UnknownChordSegment,
+    all_have_chords_on,
+    end_has_chords_on,
+    start_has_chords_on,
 )
 from pysongbook.modify import NORMALIZER
 
@@ -390,6 +398,7 @@ class ModifiedSongsLaTeXFormat(SongFormat):
             ChordTabAnnotationParser(),
         ]
     )
+    index_code: str = "\\showindex[2]{{{name}}}{{{code}}}\n\\newpage"
 
     def __post_init__(self):
         super().__init__()
@@ -411,9 +420,8 @@ class ModifiedSongsLaTeXFormat(SongFormat):
         self.command_parsers_by_name: dict[str, LaTeXSegmentCommandParser | LaTeXAnnotationCommandParser] = {
             cmd.command_name: cmd for cmd in (*self.segment_command_parsers, *self.annotation_command_parsers)
         }
-        self._standalone_init_text = None
 
-    def loads(self, song_text: str) -> Song:  # noqa: C901 # no time
+    def load_song(self, song_text: str) -> Song:  # noqa: C901 # no time
         annotations, remnant = self._parse_beginsong(song_text)
         strophe_strs = self.strophe_split_pattern.split(remnant)
         if len(strophe_strs) < 2:
@@ -522,7 +530,7 @@ class ModifiedSongsLaTeXFormat(SongFormat):
                 if comment_end_pos == 0:  # newline not found, assume end of string
                     return Comment(text=text[current_pos:]), len(text)
                 # Remove initial % and spaces and trailing newline.
-                comment_text = text[current_pos+1:comment_end_pos].lstrip().rstrip("\n")
+                comment_text = text[current_pos + 1 : comment_end_pos].lstrip().rstrip("\n")
                 comment = Comment(text=comment_text if comment is None else comment.text + "\n" + comment_text)
                 current_pos = comment_end_pos
             else:
@@ -780,7 +788,7 @@ class ModifiedSongsLaTeXFormat(SongFormat):
         emb_strophe = EmbeddedStrophe(RepeatStropheWithSameMark(mark=mark, segments=segs))
         return [emb_strophe] * n_repeats
 
-    def dumps(self, song: Song, chords: bool = True) -> str:
+    def dump_song(self, song: Song, chords: bool = True) -> str:
         parts = [self.dump_beginsong(song)]
         annot_part = self.dump_annotations(song, chords=chords)
         if annot_part:
@@ -818,7 +826,7 @@ class ModifiedSongsLaTeXFormat(SongFormat):
         elif isinstance(annot, ShowChordTab):
             # \showchordtab{C/G}{332010:342010}{1.5}{10}{4}
             return (
-                f"\\showchordtab{{{self.dump_chord(annot.chord)}}}{{{annot.layout_str}}}"
+                f"\\showchordtab{{{self.dump_chord(annot.chord)}}}{{{annot.colon_string}}}"
                 f"{{{annot.width}}}{{{annot.hpos}}}{{{annot.vpos}}}"
             )
         elif isinstance(annot, TurnChordsOff):
@@ -922,9 +930,19 @@ class ModifiedSongsLaTeXFormat(SongFormat):
         elif isinstance(seg, UnchordedSegment | UnknownChordSegment) or (
             isinstance(seg, ChordedSegment) and not chords
         ):
-            if chords and prev_seg is not None and start_has_chords_on([prev_seg]) and isinstance(seg, UnchordedSegment):
+            if (
+                chords
+                and prev_seg is not None
+                and start_has_chords_on([prev_seg])
+                and isinstance(seg, UnchordedSegment)
+            ):
                 yield "\n\\chordsoff\n"
-            if chords and isinstance(seg, UnknownChordSegment) and prev_seg is not None and not start_has_chords_on([prev_seg]):
+            if (
+                chords
+                and isinstance(seg, UnknownChordSegment)
+                and prev_seg is not None
+                and not start_has_chords_on([prev_seg])
+            ):
                 yield "\n\\chordson\n"
             yield self.dump_text(seg.text)
         elif isinstance(seg, RepeatCount):
@@ -985,18 +1003,67 @@ class ModifiedSongsLaTeXFormat(SongFormat):
             some_text = pat.sub(sub, some_text)
         return some_text
 
-    def merge(self, song_texts: list[str]) -> str:
+    def dump_index(self, index: SongIndex, identifier: str) -> dict[str | None, str]:
+        index_ref = self._dump_index_ref(index.title, identifier)
+        index_content = "\n".join(self._dump_index_content(index))
+        return {None: index_ref, f"{identifier}.sbx": index_content}
+
+    def _index_name_to_identifier(self, name: str) -> str:
+        # Leave just A-Za-z after stripping accents.
+        ascii_only = "".join(
+            c
+            for c in unicodedata.normalize("NFKD", name).encode("ascii", errors="ignore").decode("ascii")
+            if c.isalpha()
+        )
+        if len(ascii_only) > 2:
+            return ascii_only
+        return hashlib.sha256(name.encode("utf8")).hexdigest()[:10]
+
+    @staticmethod
+    def _dump_index_ref(title: str, identifier: str) -> str:
+        return f"\\showindex[2]{{{title}}}{{{identifier}}}\n\\newpage"
+
+    @staticmethod
+    def _dump_index_content(index: SongIndex) -> Generator[str, None, None]:
+        for group, items in index.groups.items():
+            if index.is_initial:
+                yield f"\\begin{{idxblock}}{{{group}}}"
+            else:
+                yield f"\\vspace{{0.5ex}}\\idxentry{{\\textbf{{{group}}}}}{{\\hspace{{\\stretch{{1}}}}}}"
+            for item in items:
+                label = item.label + (f" \\emph{{({item.specifier})}}" if item.specifier else "")
+                yield f"\\idxentry{{{label}}}{{\\hyperlink{{song-{item.order}}}{{\\pageref*{{song-{item.order}}}}}}}"
+            if index.is_initial:
+                yield "\\end{idxblock}"
+
+    @cached_property
+    def standalone_template(self) -> str:
+        with (Path(__file__).parent / "modif_songs_latex_template.tex").open(encoding="utf8") as f:
+            return f.read()
+
+    @staticmethod
+    def is_index_content(content: str) -> bool:
+        return content.startswith("\\begin{idxblock}")
+
+    def make_standalone(self, song_content: str, index_content: str = "", title_content: str = "") -> str:
+        if self.is_index_content(song_content):
+            # Pass auxiliary index files through.
+            return song_content
+        return (
+            self.standalone_template.replace("<<|title|>>", title_content)
+            .replace("<<|indexes|>>", index_content)
+            .replace("<<|songs|>>", song_content)
+        )
+
+    def merge_songs(self, song_texts: Iterable[str], standalone: bool) -> str:
+        if standalone:
+            # Insert hypertargets and labels for index hyperlinks for each song.
+            amended_song_texts = []
+            for i, song_text in enumerate(song_texts):
+                beginsong, rest = song_text.split("\n", maxsplit=1)
+                amended_song_texts.append(beginsong + f"\\hypertarget{{song-{i+1}}}{{}}\\label{{song-{i+1}}}\n" + rest)
+            song_texts = amended_song_texts
         return "\n\n".join(song_texts)
-
-    @property
-    def standalone_init_text(self):
-        if self._standalone_init_text is None:
-            with (Path(__file__).parent / "modif_songs_latex_init.tex").open(encoding="utf8") as f:
-                self._standalone_init_text = f.read()
-        return self._standalone_init_text
-
-    def make_standalone(self, song_text: str) -> str:
-        return self.standalone_init_text + song_text + "\n\n\\end{songs}\n\\end{document}"
 
 
 if __name__ == "__main__":
@@ -1008,9 +1075,9 @@ if __name__ == "__main__":
         if path.suffix == ".tex" and "berousek" in str(path):
             text = path.open(encoding="utf8").read()
             print(text)  # noqa: T201
-            song = NORMALIZER.modify(in_out_format.loads(text))
+            song = NORMALIZER.modify(in_out_format.load_song(text))
             pprint.pprint(song)  # noqa: T203
-            result = in_out_format.dumps(song, chords=True)
+            result = in_out_format.dump_song(song, chords=True)
             print(result)  # noqa: T201
 
     # # ahoj_slunko_path = Path(__file__).parent.parent / "test" / "data" / "Ahoj slunko - Jaromír Nohavica.txt"

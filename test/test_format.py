@@ -34,9 +34,9 @@ def test_modif_songs_latex_parser(input_texs: dict[str, str], expected_output_te
     for name, text in input_texs.items():
         if "Smute" not in name:
             continue
-        song = NORMALIZER.modify(format.loads(text))
-        result = format.dumps(song, chords=True)
-        dump_format.dumps(song)
+        song = NORMALIZER.modify(format.load_song(text))
+        result = format.dump_song(song, chords=True)
+        dump_format.dump_song(song)
         if name in expected_output_texs:
             assert result.strip() == expected_output_texs[name].strip()
 

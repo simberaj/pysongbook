@@ -159,7 +159,7 @@ class BassNote(ChordModifier):
 
 
 @dataclasses.dataclass
-class GenericChordModifier(ChordModifier):  # todo replace with meaningful ChordModifiers
+class GenericChordModifier(ChordModifier):
     string: str
     level: ClassVar[int] = 1
 
@@ -457,8 +457,9 @@ class Annotation(ABC):
     def is_chord_annotation(self) -> bool:
         raise NotImplementedError
 
+    @property
     @abc.abstractmethod
-    def to_string(self, delimiter: str) -> str:
+    def string(self) -> str:
         raise NotImplementedError
 
 
@@ -467,8 +468,9 @@ class AuthorAnnotation(Annotation):
     name: str
     is_chord_annotation: ClassVar[bool] = False
 
-    def to_string(self, delimiter: str) -> str:
-        return "Author" + delimiter + self.name
+    @cached_property
+    def string(self) -> str:
+        return self.name
 
 
 @dataclasses.dataclass
@@ -476,8 +478,9 @@ class TitleAnnotation(Annotation):
     title: str
     is_chord_annotation: ClassVar[bool] = False
 
-    def to_string(self, delimiter: str) -> str:
-        return "Title" + delimiter + self.title
+    @cached_property
+    def string(self) -> str:
+        return self.title
 
 
 @dataclasses.dataclass
@@ -485,8 +488,9 @@ class CapoAnnotation(Annotation):
     fret: int
     is_chord_annotation: ClassVar[bool] = True
 
-    def to_string(self, delimiter: str) -> str:
-        return "Capo" + delimiter + str(self.fret)
+    @cached_property
+    def string(self) -> str:
+        return str(self.fret)
 
 
 @dataclasses.dataclass
@@ -494,8 +498,9 @@ class TransposeAnnotation(Annotation):
     fret: int
     is_chord_annotation: ClassVar[bool] = True
 
-    def to_string(self, delimiter: str) -> str:
-        return "Transpose" + delimiter + str(self.fret)
+    @cached_property
+    def string(self) -> str:
+        return str(self.fret)
 
 
 @dataclasses.dataclass
@@ -503,8 +508,9 @@ class PickAnnotation(Annotation):
     pattern: str
     is_chord_annotation: ClassVar[bool] = True
 
-    def to_string(self, delimiter: str) -> str:
-        return "Pick" + delimiter + self.pattern
+    @cached_property
+    def string(self) -> str:
+        return self.pattern
 
 
 @dataclasses.dataclass
@@ -512,16 +518,15 @@ class NoteAnnotation(Annotation):
     text: str
     is_chord_annotation: ClassVar[bool] = False
 
-    def to_string(self, delimiter: str) -> str:
-        return "Note" + delimiter + self.text
+    @cached_property
+    def string(self) -> str:
+        return self.text
 
 
 @dataclasses.dataclass
 class FadeOutAnnotation(Annotation):
     is_chord_annotation: ClassVar[bool] = False
-
-    def to_string(self, delimiter: str) -> str:
-        return f"Ending{delimiter}to fade out"
+    string: ClassVar[str] = "to fade out"
 
 
 @dataclasses.dataclass
@@ -529,8 +534,9 @@ class Comment(Annotation):
     text: str
     is_chord_annotation: ClassVar[bool] = False
 
-    def to_string(self, delimiter: str) -> str:
-        return "Comment" + delimiter + self.text
+    @cached_property
+    def string(self) -> str:
+        return self.text
 
 
 @dataclasses.dataclass
@@ -545,7 +551,11 @@ class ShowChordTab(Annotation):
     is_chord_annotation: ClassVar[bool] = True
 
     @cached_property
-    def layout_str(self) -> str:
+    def string(self) -> str:
+        return self.chord.to_string() + " = " + self.colon_string
+
+    @cached_property
+    def colon_string(self) -> str:
         layout_str = string_positions_to_string(self.positions)
         if self.fret > 0:
             layout_str = f"{self.fret}:{layout_str}"
@@ -553,22 +563,20 @@ class ShowChordTab(Annotation):
             layout_str += ":" + string_positions_to_string(self.fingers)
         return layout_str
 
-    def to_string(self, delimiter: str) -> str:
-        return self.chord.to_string() + delimiter + self.layout_str
-
 
 def string_positions_to_string(positions: StringPositions) -> str:
     return "".join(str(pos) if pos is not None else "X" for pos in positions)
 
 
 @dataclasses.dataclass
-class GenericAnnotation(Annotation):  # TODO this should be replaced by more specialized subclasses & left as fallback
+class GenericAnnotation(Annotation):
     key: str
     value: str
     is_chord_annotation: bool = False
 
-    def to_string(self, delimiter: str) -> str:
-        return self.key + delimiter + self.value
+    @cached_property
+    def string(self) -> str:
+        return self.key + ": " + self.value
 
 
 A = TypeVar("A", bound=Annotation)
@@ -582,14 +590,22 @@ class Song:
     def get_annotations_of_type(self, annot_type: type[A]) -> list[A]:
         return [annot for annot in self.annotations if isinstance(annot, annot_type)]
 
-    def get_title(self) -> str | None:
-        titles = [annot.title for annot in self.get_annotations_of_type(TitleAnnotation)]
-        if not titles:
+    def get_single_annotation_of_type(self, annot_type: type[A]) -> A | None:
+        annots = self.get_annotations_of_type(annot_type)
+        if not annots:
             return None
-        elif len(titles) > 1:
-            raise MalformedSongError("multiple song titles")
+        elif len(annots) > 1:
+            raise MalformedSongError(f"multiple song annotations of type {annot_type}")
         else:
-            return titles[0]
+            return annots[0]
+
+    def get_title(self) -> str | None:
+        title_or_none = self.get_single_annotation_of_type(TitleAnnotation)
+        return title_or_none.title if title_or_none else None
+
+    def get_author(self) -> str | None:
+        auth_or_none = self.get_single_annotation_of_type(AuthorAnnotation)
+        return auth_or_none.name if auth_or_none else None
 
     def get_displayable_annotations(
         self,
